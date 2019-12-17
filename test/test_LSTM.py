@@ -2,9 +2,12 @@ from brevitas.nn import QuantLSTMCELL
 import torch.nn as nn
 from LSTMcell import *
 import torch
+from brevitas.core.quant import QuantType
 
 if __name__ == '__main__':
-    weight_config = {}
+    weight_config = {
+        'weight_quant_type' : QuantType.INT
+    }
     # weight_config['quant_type'] = 'QuantType.INT'
     activation_config = {}
     state1 = torch.rand(2,500)

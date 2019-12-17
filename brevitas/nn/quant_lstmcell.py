@@ -49,7 +49,7 @@ class QuantLSTMCELL(torch.jit.ScriptModule):
 
             self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
             self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
-            self.weight_config['weight_scaling_stats_input_concat_dim'] = 1
+            self.weight_config['weight_scaling_stats_input_concat_dim'] = 0 # TO DO : check this
             self.weight_config['weight_scaling_stats_reduce_dim'] = None
             self.weight_quant_hh, self.bias_quant_hh = self.configure_weight(self.weight_hh, self.weight_config)
             self.weight_quant_ih, self.bias_quant_ih = self.configure_weight(self.weight_ih, self.weight_config)
@@ -150,11 +150,11 @@ class QuantLSTMCELL(torch.jit.ScriptModule):
                                      max_overall_bit_width=weight_config.get('weight_max_overall_bit_width', None),
                                      ternary_threshold=weight_config.get('weight_ternary_threshold', 0.5),
                                      scaling_stats_input_view_shape_impl=weight_config.get('weight_stats_input_view_shape_impl', StatsInputViewShapeImpl.OVER_TENSOR),
-                                     scaling_stats_input_concat_dim=weight_config.get('weight_scaling_stats_input_concat_dim', 1),
+                                     scaling_stats_input_concat_dim=weight_config.get('weight_scaling_stats_input_concat_dim', 0),
                                      scaling_stats_sigma=weight_config.get('weight_scaling_stats_sigma', 3.0),
                                      scaling_min_val=weight_config.get('weight_scaling_min_val', SCALING_MIN_VAL),
                                      override_pretrained_bit_width=weight_config.get('weight_override_pretrained_bit_width', False),
-                                     tracked_parameter_list=weight,
+                                     tracked_parameter_list=[weight],
                                      zero_hw_sentinel=zero_hw_sentinel)
             bqp = BiasQuantProxy(quant_type=weight_config.get('bias_quant_type', QuantType.FP) ,
                                      bit_width=weight_config.get('bias_bit_width', 8),
@@ -257,10 +257,10 @@ class QuantLSTMCELL(torch.jit.ScriptModule):
             del output_dict[prefix + ZERO_HW_SENTINEL_NAME]
             return output_dict
 
-        def forward_weights(self, weight: torch.Tensor, tensor_quant: Callable[[torch.Tensor, torch.Tensor], Tuple[
-            torch.Tensor, torch.Tensor, torch.Tensor]]) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-            zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
-            out, scale, bit_width = tensor_quant(weight, zero_hw_sentinel)
-            reshaped_scale = scale.view(OVER_BATCH_OVER_CHANNELS_SHAPE)
-            return out, reshaped_scale, bit_width
+        # def forward_weights(self, weight: torch.Tensor, tensor_quant: Callable[[torch.Tensor, torch.Tensor], Tuple[
+        #     torch.Tensor, torch.Tensor, torch.Tensor]]) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        #     zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
+        #     out, scale, bit_width = tensor_quant(weight, zero_hw_sentinel)
+        #     reshaped_scale = scale.view(OVER_BATCH_OVER_CHANNELS_SHAPE)
+        #     return out, reshaped_scale, bit_width
 
