@@ -170,7 +170,7 @@ def _weight_quant_init_impl(bit_width: Optional[int],
             raise Exception("Scaling type {} not supported for weight quantization"
                             .format(str(scaling_impl_type)))
 
-        if bit_width == 1 and quant_type == QuantType.BINARY:
+    if bit_width == 1 and quant_type == QuantType.BINARY:
             tensor_quant = BinaryQuant(scaling_impl=scaling_impl)
 
         elif bit_width == 2 and quant_type == QuantType.TERNARY:
@@ -184,10 +184,8 @@ def _weight_quant_init_impl(bit_width: Optional[int],
                     raise Exception("Bit width is not defined properly")
 
                 if bit_width_impl_type == BitWidthImplType.CONST:
-                    # tensor_clamp_impl = TensorClampSte()
                     bit_width_impl = BitWidthConst(bit_width, restrict_bit_width_type)
                 elif bit_width_impl_type == BitWidthImplType.PARAMETER:
-                    # tensor_clamp_impl = TensorClamp()
                     bit_width_impl = BitWidthParameter(bit_width_init=bit_width,
                                                        restrict_bit_width_type=restrict_bit_width_type,
                                                        min_overall_bit_width=min_overall_bit_width,
@@ -197,11 +195,11 @@ def _weight_quant_init_impl(bit_width: Optional[int],
                     raise Exception("Bit width type {} not supported for weight quantization."
                                     .format(str(bit_width_impl_type)))
             else:
-                # tensor_clamp_impl = TensorClamp()
                 bit_width_impl = bit_width_impl_override
 
-            if bit_width_impl_type == BitWidthImplType.CONST and (
-                    scaling_impl_type == ScalingImplType.STATS or scaling_impl_type == ScalingImplType.AFFINE_STATS):
+            if bit_width_impl_type == BitWidthImplType.CONST and \
+                    (scaling_impl_type == ScalingImplType.STATS
+                     or scaling_impl_type == ScalingImplType.AFFINE_STATS):
                 tensor_clamp_impl = TensorClampSte()
             else:
                 tensor_clamp_impl = TensorClamp()
