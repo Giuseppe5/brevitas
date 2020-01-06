@@ -8,5 +8,5 @@ from .quant_scale_bias import ScaleBias, QuantScaleBias
 from .hadamard_classifier import HadamardClassifier
 from .quant_conv1d import QuantConv1d
 from .quant_ConvTranspose1d import QuantConvTranspose1d
-from .quant_lstmlayer import QuantLSTMLayer
+from .quant_lstmlayer import QuantLSTMLayer, BidirLSTMLayer
 from .LSTMLayer import LSTMLayer
