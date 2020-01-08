@@ -47,7 +47,6 @@ import math
 import torch
 from torch import nn, Tensor
 
-
 from brevitas.core import ZERO_HW_SENTINEL_NAME
 from brevitas.core.bit_width import BitWidthConst, BitWidthParameter, BitWidthImplType, IdentityBitWidth
 from brevitas.core.function_wrapper import TensorClampSte, TensorClamp
@@ -65,7 +64,6 @@ from brevitas.config import docstrings
 from .quant_proxy import QuantProxy
 
 __all__ = ['WeightQuantProxy', 'BiasQuantProxy']
-
 
 OVER_BATCH_OVER_CHANNELS_SHAPE = (1, -1, 1, 1)
 
@@ -119,7 +117,6 @@ def _weight_quant_init_impl(bit_width: Optional[int],
                             tracked_parameter_list: List[torch.nn.Parameter],
                             zero_hw_sentinel: torch.Tensor,
                             override_pretrained_bit_width: bool):
-
     if quant_type == QuantType.FP:
         tensor_quant = IdentityQuant()
     else:
@@ -382,7 +379,7 @@ class WeightQuantProxy(ParameterQuantProxy):
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
                               missing_keys, unexpected_keys, error_msgs):
         super(WeightQuantProxy, self)._load_from_state_dict(state_dict, prefix, local_metadata, strict,
-            missing_keys, unexpected_keys, error_msgs)
+                                                            missing_keys, unexpected_keys, error_msgs)
         if config.REINIT_WEIGHT_QUANT_ON_LOAD:
             self.re_init_tensor_quant()
 
@@ -444,5 +441,4 @@ class BiasQuantProxy(ParameterQuantProxy):
             return out, output_scale, bias_bit_width
         else:
             return x, input_scale, input_bit_width
-
 
