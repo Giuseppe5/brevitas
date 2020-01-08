@@ -90,12 +90,19 @@ from torch import Tensor
 from brevitas.quant_tensor import QuantTensor
 from brevitas.core import ZERO_HW_SENTINEL_NAME, ZERO_HW_SENTINEL_VALUE
 import numbers
+from collections import namedtuple
 
 OVER_BATCH_OVER_CHANNELS_SHAPE = (1, -1, 1, 1)
 LSTMState = namedtuple('LSTMState', ['hx', 'cx'])
 
 __all__ = ['QuantLSTMLayer', 'BidirLSTMLayer']
 
+brevitas_QuantType = {
+    'QuantType.INT' : QuantType.INT,
+    'QuantType.FP' : QuantType.FP,
+    'QuantType.BINARY': QuantType.BINARY,
+    'QuantType.TERNARY': QuantType.TERNARY
+}
 
 class LayerNorm(nn.Module):
     def __init__(self, normalized_shape):
@@ -189,6 +196,10 @@ class QuantLSTMLayer(nn.Module):
             self.layernorm_i = nn.LayerNorm(4 * hidden_size)
             self.layernorm_h = nn.LayerNorm(4 * hidden_size)
             self.layernorm_c = nn.LayerNorm(hidden_size)
+
+        self.weight_config['weight_quant_type'] = brevitas_QuantType[weight_config.get('weight_quant_type', 'QuantType.FP')]
+        self.weight_config['bias_quant_type'] = brevitas_QuantType[weight_config.get('bias_quant_type', 'QuantType.FP')]
+        self.activation_config['quant_type'] = brevitas_QuantType[activation_config.get('quant_type', 'QuantType.FP')]
 
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
@@ -295,7 +306,7 @@ class QuantLSTMLayer(nn.Module):
     def configure_weight(self, weight, weight_config):
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
         wqp: IdentityQuant = _weight_quant_init_impl(bit_width=weight_config.get('weight_bit_width', 8),
-                                                     quant_type=weight_config.get('weight_quant_type', QuantType.FP),
+                                                     quant_type=weight_config.get('weight_quant_type'),
                                                      narrow_range=weight_config.get('weight_narrow_range', True),
                                                      scaling_override=weight_config.get('weight_scaling_override',
                                                                                         None),
@@ -335,7 +346,7 @@ class QuantLSTMLayer(nn.Module):
                                                          'weight_override_pretrained_bit_width', False),
                                                      tracked_parameter_list=weight,
                                                      zero_hw_sentinel=zero_hw_sentinel)
-        bqp = BiasQuantProxy(quant_type=weight_config.get('bias_quant_type', QuantType.FP),
+        bqp = BiasQuantProxy(quant_type=weight_config.get('bias_quant_type'),
                              bit_width=weight_config.get('bias_bit_width', 8),
                              narrow_range=weight_config.get('bias_narrow_range', True))
         return wqp, bqp
@@ -356,7 +367,7 @@ class QuantLSTMLayer(nn.Module):
         activation_object = _activation_quant_init_impl(activation_impl=activation_impl,
                                                         bit_width=activation_config.get('bit_width', 8),
                                                         narrow_range=activation_config.get('narrow_range', True),
-                                                        quant_type=activation_config.get('quant_type', QuantType.FP),
+                                                        quant_type=activation_config.get('quant_type'),
                                                         float_to_int_impl_type=activation_config.get(
                                                             'float_to_int_impl_type', FloatToIntImplType.ROUND),
                                                         min_overall_bit_width=activation_config.get(
@@ -378,24 +389,16 @@ class QuantLSTMLayer(nn.Module):
                                                         min_val=activation_config.get('min_val', min_val),
                                                         max_val=activation_config.get('max_val', max_val),
                                                         signed=activation_config.get('signed', signed),
-                                                        per_channel_broadcastable_shape=activation_config.get(
-                                                            'per_channel_broadcastable_shape', None),
-                                                        scaling_per_channel=activation_config.get('scaling_per_channel',
-                                                                                                  False),
+                                                        per_channel_broadcastable_shape=None,
+                                                        scaling_per_channel=False,
                                                         scaling_override=activation_config.get('scaling_override',
                                                                                                None),
-                                                        scaling_impl_type=activation_config.get('scaling_impl_type',
-                                                                                                ScalingImplType.CONST),
-                                                        scaling_stats_sigma=activation_config.get('scaling_stats_sigma',
-                                                                                                  None),
-                                                        scaling_stats_input_view_shape_impl=activation_config.get(
-                                                            'scaling_stats_input_view_shape_impl', None),
-                                                        scaling_stats_op=activation_config.get('scaling_stats_op',
-                                                                                               None),
-                                                        scaling_stats_buffer_momentum=activation_config.get(
-                                                            'scaling_stats_buffer_momentum', None),
-                                                        scaling_stats_permute_dims=activation_config.get(
-                                                            'scaling_stats_permute_dims', None))
+                                                        scaling_impl_type=ScalingImplType.CONST,
+                                                        scaling_stats_sigma=None,
+                                                        scaling_stats_input_view_shape_impl=None,
+                                                        scaling_stats_op=None,
+                                                        scaling_stats_buffer_momentum=None,
+                                                        scaling_stats_permute_dims=None)
 
         # if activation_config.get('bit_width_impl_type', BitWidthImplType.CONST) == BitWidthImplType.PARAMETER:
         return activation_object
