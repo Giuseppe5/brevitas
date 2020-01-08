@@ -47,7 +47,6 @@ import math
 import torch
 from torch import nn, Tensor
 
-
 from brevitas.core import ZERO_HW_SENTINEL_NAME
 from brevitas.core.bit_width import BitWidthConst, BitWidthParameter, BitWidthImplType
 from brevitas.core.function_wrapper import TensorClampSte, TensorClamp
@@ -65,7 +64,6 @@ from brevitas.config import docstrings
 from .quant_proxy import QuantProxy
 
 __all__ = ['WeightQuantProxy', 'BiasQuantProxy']
-
 
 OVER_BATCH_OVER_CHANNELS_SHAPE = (1, -1, 1, 1)
 
@@ -119,7 +117,6 @@ def _weight_quant_init_impl(bit_width: Optional[int],
                             tracked_parameter_list: List[torch.nn.Parameter],
                             zero_hw_sentinel: torch.Tensor,
                             override_pretrained_bit_width: bool):
-
     if quant_type == QuantType.FP:
         tensor_quant = IdentityQuant()
     else:
@@ -187,10 +184,10 @@ def _weight_quant_init_impl(bit_width: Optional[int],
                     raise Exception("Bit width is not defined properly")
 
                 if bit_width_impl_type == BitWidthImplType.CONST:
-                    tensor_clamp_impl = TensorClampSte()
+                    # tensor_clamp_impl = TensorClampSte()
                     bit_width_impl = BitWidthConst(bit_width, restrict_bit_width_type)
                 elif bit_width_impl_type == BitWidthImplType.PARAMETER:
-                    tensor_clamp_impl = TensorClamp()
+                    # tensor_clamp_impl = TensorClamp()
                     bit_width_impl = BitWidthParameter(bit_width_init=bit_width,
                                                        restrict_bit_width_type=restrict_bit_width_type,
                                                        min_overall_bit_width=min_overall_bit_width,
@@ -200,8 +197,14 @@ def _weight_quant_init_impl(bit_width: Optional[int],
                     raise Exception("Bit width type {} not supported for weight quantization."
                                     .format(str(bit_width_impl_type)))
             else:
-                tensor_clamp_impl = TensorClamp()
+                # tensor_clamp_impl = TensorClamp()
                 bit_width_impl = bit_width_impl_override
+
+            if bit_width_impl_type == BitWidthImplType.CONST and (
+                    scaling_impl_type == ScalingImplType.STATS or scaling_impl_type == ScalingImplType.AFFINE_STATS):
+                tensor_clamp_impl = TensorClampSte()
+            else:
+                tensor_clamp_impl = TensorClamp()
 
             float_to_int_impl = RestrictValue(restrict_value_type=RestrictValueType.INT,
                                               float_to_int_impl_type=FloatToIntImplType.ROUND,
@@ -378,7 +381,7 @@ class WeightQuantProxy(ParameterQuantProxy):
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
                               missing_keys, unexpected_keys, error_msgs):
         super(WeightQuantProxy, self)._load_from_state_dict(state_dict, prefix, local_metadata, strict,
-            missing_keys, unexpected_keys, error_msgs)
+                                                            missing_keys, unexpected_keys, error_msgs)
         if config.REINIT_WEIGHT_QUANT_ON_LOAD:
             self.re_init_tensor_quant()
 
@@ -430,5 +433,3 @@ class BiasQuantProxy(ParameterQuantProxy):
             return out
         else:
             return x
-
-
