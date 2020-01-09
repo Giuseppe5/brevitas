@@ -222,9 +222,9 @@ class QuantLSTMLayer(nn.Module):
                 nn.LayerNorm(hidden_size), nn.LayerNorm(hidden_size)
             self.layernorm_c = nn.LayerNorm(hidden_size)
 
-        self.weight_config['weight_quant_type'] = brevitas_QuantType[weight_config.get('weight_quant_type', 'QuantType.FP')]
-        self.weight_config['bias_quant_type'] = brevitas_QuantType[weight_config.get('bias_quant_type', 'QuantType.FP')]
-        self.activation_config['quant_type'] = brevitas_QuantType[activation_config.get('quant_type', 'QuantType.FP')]
+        # self.weight_config['weight_quant_type'] = brevitas_QuantType[weight_config.get('weight_quant_type', 'QuantType.FP')]
+        # self.weight_config['bias_quant_type'] = brevitas_QuantType[weight_config.get('bias_quant_type', 'QuantType.FP')]
+        # self.activation_config['quant_type'] = brevitas_QuantType[activation_config.get('quant_type', 'QuantType.FP')]
 
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
@@ -261,9 +261,9 @@ class QuantLSTMLayer(nn.Module):
             self.rec_quant = IdentityQuant()
             self.out_quant = IdentityQuant()
 
-        if self.weight_config.get('weight_quant_type', QuantType.FP) == QuantType.FP and compute_output_bit_width:
+        if self.weight_config.get('weight_quant_type', 'QuantType.FP') == 'QuantType.FP' and compute_output_bit_width:
             raise Exception("Computing output bit width requires enabling quantization")
-        if self.weight_config.get('bias_quant_type', QuantType.FP) != QuantType.FP and not (
+        if self.weight_config.get('bias_quant_type', 'QuantType.FP') != 'QuantType.FP' and not (
                 compute_output_scale and compute_output_bit_width):
             raise Exception("Quantizing bias requires to compute output scale and output bit width")
 
@@ -375,7 +375,7 @@ class QuantLSTMLayer(nn.Module):
     def configure_weight(self, weight, weight_config):
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
         wqp: IdentityQuant = _weight_quant_init_impl(bit_width=weight_config.get('weight_bit_width', 8),
-                                                     quant_type=weight_config.get('weight_quant_type'),
+                                                     quant_type=brevitas_QuantType[weight_config.get('weight_quant_type', 'QuantType.FP')],
                                                      narrow_range=weight_config.get('weight_narrow_range', True),
                                                      scaling_override=weight_config.get('weight_scaling_override',
                                                                                         None),
@@ -415,7 +415,7 @@ class QuantLSTMLayer(nn.Module):
                                                          'weight_override_pretrained_bit_width', False),
                                                      tracked_parameter_list=weight,
                                                      zero_hw_sentinel=zero_hw_sentinel)
-        bqp = BiasQuantProxy(quant_type=weight_config.get('bias_quant_type'),
+        bqp = BiasQuantProxy(quant_type=brevitas_QuantType[weight_config.get('bias_quant_type', 'QuantType.FP')],
                              bit_width=weight_config.get('bias_bit_width', 8),
                              narrow_range=weight_config.get('bias_narrow_range', True))
         return wqp, bqp
@@ -436,7 +436,7 @@ class QuantLSTMLayer(nn.Module):
         activation_object = _activation_quant_init_impl(activation_impl=activation_impl,
                                                         bit_width=activation_config.get('bit_width', 8),
                                                         narrow_range=activation_config.get('narrow_range', True),
-                                                        quant_type=activation_config.get('quant_type'),
+                                                        quant_type=brevitas_QuantType[activation_config.get('quant_type', 'QuantType.FP')],
                                                         float_to_int_impl_type=activation_config.get(
                                                             'float_to_int_impl_type', FloatToIntImplType.ROUND),
                                                         min_overall_bit_width=activation_config.get(
