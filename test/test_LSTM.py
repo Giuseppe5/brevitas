@@ -1,4 +1,4 @@
-from brevitas.nn import QuantLSTMLayer, LSTMLayer, BidirLSTMLayer, AAA
+from brevitas.nn import QuantLSTMLayer, LSTMLayer, BidirLSTMLayer
 import torch.nn as nn
 # from LSTMcell import *
 import torch
@@ -37,12 +37,13 @@ class TestLSTMQuant:
         # Control
         lstm = torch.nn.LSTM(INPUT_SIZE, HIDDEN, 1)
         lstm_state = LSTMState(states.hx.unsqueeze(0), states.cx.unsqueeze(0))
-        start = time.time()
         q_lstm.load_state_dict_new(lstm.state_dict())
+        lstm_out, lstm_out_state = lstm(input, lstm_state)
+        start = time.time()
+        out, custom_state = q_lstm(input, states)
         end = time.time()-start
         print(end)
-        lstm_out, lstm_out_state = lstm(input, lstm_state)
-        out, custom_state = q_lstm(input, states)
+
         assert (out - lstm_out).abs().max() < 1e-5
         assert (custom_state[0] - lstm_out_state[0]).abs().max() < 1e-5
         assert (custom_state[1] - lstm_out_state[1]).abs().max() < 1e-5
