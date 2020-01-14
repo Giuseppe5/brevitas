@@ -1,4 +1,4 @@
-from brevitas.nn import QuantLSTMLayer, LSTMLayer, BidirLSTMLayer
+from brevitas.nn import QuantLSTMLayer, BidirLSTMLayer
 import torch.nn as nn
 # from LSTMcell import *
 import torch
