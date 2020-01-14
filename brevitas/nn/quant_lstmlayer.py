@@ -125,8 +125,8 @@ class LayerNorm(nn.Module):
         # XXX: This is true for our LSTM / NLP use case and helps simplify code
         assert len(normalized_shape) == 1
 
-        self.weight = nn.Parameter(torch.ones(normalized_shape))
-        self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        self.weight = nn.Parameter(torch.ones(normalized_shape), requires_grad=True)
+        self.bias = nn.Parameter(torch.zeros(normalized_shape), requires_grad=True)
         self.normalized_shape = normalized_shape
 
     # @jit.script_method
@@ -162,7 +162,7 @@ class IdentityBias(nn.Module):
 def reverse(lst):
     # type: (List[Tensor]) -> List[Tensor]
     out = torch.jit.annotate(List[Tensor], [])
-    start = len(lst)-1
+    start = len(lst) - 1
     end = -1
     step = -1
     for i in range(start, end, step):
@@ -182,23 +182,21 @@ class QuantLSTMLayer(nn.Module):
         self.weight_config = weight_config
         self.activation_config = activation_config
 
-        # self.weight_ih = nn.Parameter(torch.randn(4 * hidden_size, input_size))
-        self.weight_ii = nn.Parameter(torch.randn(hidden_size, input_size))
-        self.weight_fi = nn.Parameter(torch.randn(hidden_size, input_size))
-        self.weight_ai = nn.Parameter(torch.randn(hidden_size, input_size))
-        self.weight_oi = nn.Parameter(torch.randn(hidden_size, input_size))
+        self.weight_ii = nn.Parameter(torch.randn(hidden_size, input_size), requires_grad=True)
+        self.weight_fi = nn.Parameter(torch.randn(hidden_size, input_size), requires_grad=True)
+        self.weight_ai = nn.Parameter(torch.randn(hidden_size, input_size), requires_grad=True)
+        self.weight_oi = nn.Parameter(torch.randn(hidden_size, input_size), requires_grad=True)
 
-        # self.weight_hh = nn.Parameter(torch.randn(4 * hidden_size, hidden_size))
-        self.weight_ih = nn.Parameter(torch.randn(hidden_size, hidden_size))
-        self.weight_fh = nn.Parameter(torch.randn(hidden_size, hidden_size))
-        self.weight_ah = nn.Parameter(torch.randn(hidden_size, hidden_size))
-        self.weight_oh = nn.Parameter(torch.randn(hidden_size, hidden_size))
+        self.weight_ih = nn.Parameter(torch.randn(hidden_size, hidden_size), requires_grad=True)
+        self.weight_fh = nn.Parameter(torch.randn(hidden_size, hidden_size), requires_grad=True)
+        self.weight_ah = nn.Parameter(torch.randn(hidden_size, hidden_size), requires_grad=True)
+        self.weight_oh = nn.Parameter(torch.randn(hidden_size, hidden_size), requires_grad=True)
 
         self.reverse_input = reverse_input
 
         self.layer_norm = layer_norm
         if self.layer_norm == 'identity':
-            self.layernorm_ii, self.layernorm_fi, self.layernorm_ai, self.layernorm_oi =\
+            self.layernorm_ii, self.layernorm_fi, self.layernorm_ai, self.layernorm_oi = \
                 torch.jit.script(IdentityBias(hidden_size)), torch.jit.script(IdentityBias(hidden_size)), \
                 torch.jit.script(IdentityBias(hidden_size)), torch.jit.script(IdentityBias(hidden_size))
             self.layernorm_ih, self.layernorm_fh, self.layernorm_ah, self.layernorm_oh = \
@@ -222,31 +220,19 @@ class QuantLSTMLayer(nn.Module):
                 nn.LayerNorm(hidden_size), nn.LayerNorm(hidden_size)
             self.layernorm_c = nn.LayerNorm(hidden_size)
 
-        # self.weight_config['weight_quant_type'] = brevitas_QuantType[weight_config.get('weight_quant_type', 'QuantType.FP')]
-        # self.weight_config['bias_quant_type'] = brevitas_QuantType[weight_config.get('bias_quant_type', 'QuantType.FP')]
-        # self.activation_config['quant_type'] = brevitas_QuantType[activation_config.get('quant_type', 'QuantType.FP')]
-
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
         self.weight_config['weight_scaling_stats_input_concat_dim'] = 0
         self.weight_config['weight_scaling_stats_reduce_dim'] = None
 
-        tracked_param_list = [self.weight_ii]
-        self.weight_proxy_ii, self.bias_proxy = self.configure_weight(tracked_param_list, self.weight_config)
-        tracked_param_list = [self.weight_fi]
-        self.weight_proxy_fi, self.bias_proxy = self.configure_weight(tracked_param_list, self.weight_config)
-        tracked_param_list = [self.weight_ai]
-        self.weight_proxy_ai, self.bias_proxy = self.configure_weight(tracked_param_list, self.weight_config)
-        tracked_param_list = [self.weight_oi]
-        self.weight_proxy_oi, self.bias_proxy = self.configure_weight(tracked_param_list, self.weight_config)
-        tracked_param_list = [self.weight_ih]
-        self.weight_proxy_ih, self.bias_proxy = self.configure_weight(tracked_param_list, self.weight_config)
-        tracked_param_list = [self.weight_fh]
-        self.weight_proxy_fh, self.bias_proxy = self.configure_weight(tracked_param_list, self.weight_config)
-        tracked_param_list = [self.weight_ah]
-        self.weight_proxy_ah, self.bias_proxy = self.configure_weight(tracked_param_list, self.weight_config)
-        tracked_param_list = [self.weight_oh]
-        self.weight_proxy_oh, self.bias_proxy = self.configure_weight(tracked_param_list, self.weight_config)
+        self.weight_proxy_i = self.configure_weight([self.weight_ii, self.weight_ih], self.weight_config)
+        self.weight_proxy_f = self.configure_weight([self.weight_fi, self.weight_fh], self.weight_config)
+        self.weight_proxy_a = self.configure_weight([self.weight_ai, self.weight_ah], self.weight_config)
+        self.weight_proxy_o = self.configure_weight([self.weight_oi, self.weight_oh], self.weight_config)
+        # self.weight_proxy_ih, self.bias_proxy = self.configure_weight([self.weight_ih], self.weight_config)
+        # self.weight_proxy_fh, self.bias_proxy = self.configure_weight([self.weight_fh], self.weight_config)
+        # self.weight_proxy_ah, self.bias_proxy = self.configure_weight([self.weight_ah], self.weight_config)
+        # self.weight_proxy_oh, self.bias_proxy = self.configure_weight([self.weight_oh], self.weight_config)
 
         self.quant_sigmoid = self.configure_activation(self.activation_config, QuantSigmoid)
         self.quant_tanh = self.configure_activation(self.activation_config, QuantTanh)
@@ -278,22 +264,22 @@ class QuantLSTMLayer(nn.Module):
         #
         # out, scale, bit_width = self.weight_proxy(self.weight_hh, zero_hw_sentinel)
         # quant_weight_hh, quant_weight_hh_scale, quant_weight_hh_bit_width = out, scale, bit_width
-        out, scale, bit_width = self.weight_proxy_ii(self.weight_ii, zero_hw_sentinel)
-        quant_weight_ii, quant_weight_ii_scale, quant_weight_ii_bit_width = out, scale, bit_width
-        out, scale, bit_width = self.weight_proxy_fi(self.weight_fi, zero_hw_sentinel)
-        quant_weight_fi, quant_weight_fi_scale, quant_weight_fi_bit_width = out, scale, bit_width
-        out, scale, bit_width = self.weight_proxy_ai(self.weight_ai, zero_hw_sentinel)
-        quant_weight_ai, quant_weight_ai_scale, quant_weight_ai_bit_width = out, scale, bit_width
-        out, scale, bit_width = self.weight_proxy_oi(self.weight_oi, zero_hw_sentinel)
-        quant_weight_oi, quant_weight_oi_scale, quant_weight_oi_bit_width = out, scale, bit_width
-        out, scale, bit_width = self.weight_proxy_ih(self.weight_ih, zero_hw_sentinel)
-        quant_weight_ih, quantweight_ih_scale, quant_weight_ih_bit_width = out, scale, bit_width
-        out, scale, bit_width = self.weight_proxy_fh(self.weight_fh, zero_hw_sentinel)
-        quant_weight_fh, quant_weight_fh_scale, quant_weight_fh_bit_width = out, scale, bit_width
-        out, scale, bit_width = self.weight_proxy_ah(self.weight_ah, zero_hw_sentinel)
-        quant_weight_ah, quant_weight_ah_scale, quant_weight_ah_bit_width = out, scale, bit_width
-        out, scale, bit_width = self.weight_proxy_oh(self.weight_oh, zero_hw_sentinel)
-        quant_weight_oh, quant_weight_oh_scale, quant_weight_oh_bit_width = out, scale, bit_width
+        quant_weight_ii, quant_weight_ii_scale, quant_weight_ii_bit_width = self.weight_proxy_i(self.weight_ii,
+                                                                                                 zero_hw_sentinel)
+        quant_weight_fi, quant_weight_fi_scale, quant_weight_fi_bit_width = self.weight_proxy_f(self.weight_fi,
+                                                                                                 zero_hw_sentinel)
+        quant_weight_ai, quant_weight_ai_scale, quant_weight_ai_bit_width = self.weight_proxy_a(self.weight_ai,
+                                                                                                 zero_hw_sentinel)
+        quant_weight_oi, quant_weight_oi_scale, quant_weight_oi_bit_width = self.weight_proxy_o(self.weight_oi,
+                                                                                                 zero_hw_sentinel)
+        quant_weight_ih, quant_weight_ih_scale, quant_weight_ih_bit_width = self.weight_proxy_i(self.weight_ih,
+                                                                                                 zero_hw_sentinel)
+        quant_weight_fh, quant_weight_fh_scale, quant_weight_fh_bit_width = self.weight_proxy_f(self.weight_fh,
+                                                                                                 zero_hw_sentinel)
+        quant_weight_ah, quant_weight_ah_scale, quant_weight_ah_bit_width = self.weight_proxy_a(self.weight_ah,
+                                                                                                 zero_hw_sentinel)
+        quant_weight_oh, quant_weight_oh_scale, quant_weight_oh_bit_width = self.weight_proxy_o(self.weight_oh,
+                                                                                                 zero_hw_sentinel)
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
         # weight_ih = torch.cat([quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi], 0)
         # weight_hh = torch.cat([quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh], 0)
@@ -304,7 +290,7 @@ class QuantLSTMLayer(nn.Module):
         end = len(inputs)
         step = 1
         if self.reverse_input:
-            start = end-1
+            start = end - 1
             end = -1
             step = -1
             # inputs = reverse(inputs)
@@ -374,51 +360,52 @@ class QuantLSTMLayer(nn.Module):
 
     def configure_weight(self, weight, weight_config):
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
-        wqp: IdentityQuant = _weight_quant_init_impl(bit_width=weight_config.get('weight_bit_width', 8),
-                                                     quant_type=brevitas_QuantType[weight_config.get('weight_quant_type', 'QuantType.FP')],
-                                                     narrow_range=weight_config.get('weight_narrow_range', True),
-                                                     scaling_override=weight_config.get('weight_scaling_override',
-                                                                                        None),
-                                                     restrict_scaling_type=weight_config.get(
-                                                         'weight_restrict_scaling_type', RestrictValueType.LOG_FP),
-                                                     scaling_const=weight_config.get('weight_scaling_const', None),
-                                                     scaling_stats_op=weight_config.get('weight_scaling_stats_op',
-                                                                                        StatsOp.MAX),
-                                                     scaling_impl_type=weight_config.get('weight_scaling_impl_type',
-                                                                                         ScalingImplType.STATS),
-                                                     scaling_stats_reduce_dim=weight_config.get(
-                                                         'weight_scaling_stats_reduce_dim', None),
-                                                     scaling_shape=weight_config.get('weight_scaling_shape',
-                                                                                     SCALING_SCALAR_SHAPE),
-                                                     bit_width_impl_type=weight_config.get('weight_bit_width_impl_type',
-                                                                                           BitWidthImplType.CONST),
-                                                     bit_width_impl_override=weight_config.get(
-                                                         'weight_bit_width_impl_override', None),
-                                                     restrict_bit_width_type=weight_config.get(
-                                                         'weight_restrict_bit_width_type', RestrictValueType.INT),
-                                                     min_overall_bit_width=weight_config.get(
-                                                         'weight_min_overall_bit_width', 2),
-                                                     max_overall_bit_width=weight_config.get(
-                                                         'weight_max_overall_bit_width', None),
-                                                     ternary_threshold=weight_config.get('weight_ternary_threshold',
-                                                                                         0.5),
-                                                     scaling_stats_input_view_shape_impl=weight_config.get(
-                                                         'weight_stats_input_view_shape_impl',
-                                                         StatsInputViewShapeImpl.OVER_TENSOR),
-                                                     scaling_stats_input_concat_dim=weight_config.get(
-                                                         'weight_scaling_stats_input_concat_dim', 0),
-                                                     scaling_stats_sigma=weight_config.get('weight_scaling_stats_sigma',
-                                                                                           3.0),
-                                                     scaling_min_val=weight_config.get('weight_scaling_min_val',
-                                                                                       SCALING_MIN_VAL),
-                                                     override_pretrained_bit_width=weight_config.get(
-                                                         'weight_override_pretrained_bit_width', False),
-                                                     tracked_parameter_list=weight,
-                                                     zero_hw_sentinel=zero_hw_sentinel)
-        bqp = BiasQuantProxy(quant_type=brevitas_QuantType[weight_config.get('bias_quant_type', 'QuantType.FP')],
-                             bit_width=weight_config.get('bias_bit_width', 8),
-                             narrow_range=weight_config.get('bias_narrow_range', True))
-        return wqp, bqp
+        wqp = _weight_quant_init_impl(bit_width=weight_config.get('weight_bit_width', 8),
+                                      quant_type=brevitas_QuantType[
+                                          weight_config.get('weight_quant_type', 'QuantType.FP')],
+                                      narrow_range=weight_config.get('weight_narrow_range', True),
+                                      scaling_override=weight_config.get('weight_scaling_override',
+                                                                         None),
+                                      restrict_scaling_type=weight_config.get(
+                                          'weight_restrict_scaling_type', RestrictValueType.LOG_FP),
+                                      scaling_const=weight_config.get('weight_scaling_const', None),
+                                      scaling_stats_op=weight_config.get('weight_scaling_stats_op',
+                                                                         StatsOp.MAX),
+                                      scaling_impl_type=weight_config.get('weight_scaling_impl_type',
+                                                                          ScalingImplType.STATS),
+                                      scaling_stats_reduce_dim=weight_config.get(
+                                          'weight_scaling_stats_reduce_dim', None),
+                                      scaling_shape=weight_config.get('weight_scaling_shape',
+                                                                      SCALING_SCALAR_SHAPE),
+                                      bit_width_impl_type=weight_config.get('weight_bit_width_impl_type',
+                                                                            BitWidthImplType.CONST),
+                                      bit_width_impl_override=weight_config.get(
+                                          'weight_bit_width_impl_override', None),
+                                      restrict_bit_width_type=weight_config.get(
+                                          'weight_restrict_bit_width_type', RestrictValueType.INT),
+                                      min_overall_bit_width=weight_config.get(
+                                          'weight_min_overall_bit_width', 2),
+                                      max_overall_bit_width=weight_config.get(
+                                          'weight_max_overall_bit_width', None),
+                                      ternary_threshold=weight_config.get('weight_ternary_threshold',
+                                                                          0.5),
+                                      scaling_stats_input_view_shape_impl=weight_config.get(
+                                          'weight_stats_input_view_shape_impl',
+                                          StatsInputViewShapeImpl.OVER_TENSOR),
+                                      scaling_stats_input_concat_dim=weight_config.get(
+                                          'weight_scaling_stats_input_concat_dim', 0),
+                                      scaling_stats_sigma=weight_config.get('weight_scaling_stats_sigma',
+                                                                            3.0),
+                                      scaling_min_val=weight_config.get('weight_scaling_min_val',
+                                                                        SCALING_MIN_VAL),
+                                      override_pretrained_bit_width=weight_config.get(
+                                          'weight_override_pretrained_bit_width', False),
+                                      tracked_parameter_list=weight,
+                                      zero_hw_sentinel=zero_hw_sentinel)
+        # bqp = BiasQuantProxy(quant_type=brevitas_QuantType[weight_config.get('bias_quant_type', 'QuantType.FP')],
+        #                      bit_width=weight_config.get('bias_bit_width', 8),
+        #                      narrow_range=weight_config.get('bias_narrow_range', True))
+        return wqp#, bqp
 
     def configure_activation(self, activation_config, activation_func=QuantSigmoid):
         signed = True
@@ -426,8 +413,6 @@ class QuantLSTMLayer(nn.Module):
         max_val = 1
         if activation_func == QuantTanh:
             activation_impl = nn.Tanh()
-            min_val = -1
-            signed = True
         elif activation_func == QuantSigmoid:
             activation_impl = nn.Sigmoid()
             min_val = 0
@@ -436,7 +421,8 @@ class QuantLSTMLayer(nn.Module):
         activation_object = _activation_quant_init_impl(activation_impl=activation_impl,
                                                         bit_width=activation_config.get('bit_width', 8),
                                                         narrow_range=activation_config.get('narrow_range', True),
-                                                        quant_type=brevitas_QuantType[activation_config.get('quant_type', 'QuantType.FP')],
+                                                        quant_type=brevitas_QuantType[
+                                                            activation_config.get('quant_type', 'QuantType.FP')],
                                                         float_to_int_impl_type=activation_config.get(
                                                             'float_to_int_impl_type', FloatToIntImplType.ROUND),
                                                         min_overall_bit_width=activation_config.get(
@@ -624,32 +610,33 @@ class QuantLSTMLayer(nn.Module):
         for name, value in state_dict.items():
             if name[:7] == 'bias_ih':
                 newstate['layernorm_ii.bias'] = value[:hidden]
-                newstate['layernorm_fi.bias'] = value[hidden:hidden*2]
-                newstate['layernorm_ai.bias'] = value[2*hidden:hidden*3]
-                newstate['layernorm_oi.bias'] = value[3*hidden:]
+                newstate['layernorm_fi.bias'] = value[hidden:hidden * 2]
+                newstate['layernorm_ai.bias'] = value[2 * hidden:hidden * 3]
+                newstate['layernorm_oi.bias'] = value[3 * hidden:]
             elif name[:7] == 'bias_hh':
                 newstate['layernorm_ih.bias'] = value[:hidden]
-                newstate['layernorm_fh.bias'] = value[hidden:hidden*2]
-                newstate['layernorm_ah.bias'] = value[2*hidden:hidden*3]
-                newstate['layernorm_oh.bias'] = value[3*hidden:]
+                newstate['layernorm_fh.bias'] = value[hidden:hidden * 2]
+                newstate['layernorm_ah.bias'] = value[2 * hidden:hidden * 3]
+                newstate['layernorm_oh.bias'] = value[3 * hidden:]
             elif name.split('_')[1] == 'ih':
                 newstate['weight_ii'] = value[:hidden, :]
-                newstate['weight_fi'] = value[hidden:hidden*2, :]
-                newstate['weight_ai'] = value[2*hidden:hidden*3,:]
-                newstate['weight_oi'] = value[3*hidden:,:]
+                newstate['weight_fi'] = value[hidden:hidden * 2, :]
+                newstate['weight_ai'] = value[2 * hidden:hidden * 3, :]
+                newstate['weight_oi'] = value[3 * hidden:, :]
             elif name.split('_')[1] == 'hh':
                 newstate['weight_ih'] = value[:hidden, :]
-                newstate['weight_fh'] = value[hidden:hidden*2, :]
-                newstate['weight_ah'] = value[2*hidden:hidden*3, :]
-                newstate['weight_oh'] = value[3*hidden:, :]
+                newstate['weight_fh'] = value[hidden:hidden * 2, :]
+                newstate['weight_ah'] = value[2 * hidden:hidden * 3, :]
+                newstate['weight_oh'] = value[3 * hidden:, :]
             else:
                 newstate[name] = value
         return newstate
 
+
 class BidirLSTMLayer(nn.Module):
     __constants__ = ['directions']
 
-    def __init__(self, input_size, hidden_size, weight_config, activation_config, layer_norm = 'identity',
+    def __init__(self, input_size, hidden_size, weight_config, activation_config, layer_norm='identity',
                  compute_output_scale=False, compute_output_bit_width=False,
                  return_quant_tensor=False):
         super(BidirLSTMLayer, self).__init__()
