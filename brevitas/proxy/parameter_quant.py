@@ -170,7 +170,7 @@ def _weight_quant_init_impl(bit_width: Optional[int],
             raise Exception("Scaling type {} not supported for weight quantization"
                             .format(str(scaling_impl_type)))
 
-    if bit_width == 1 and quant_type == QuantType.BINARY:
+        if bit_width == 1 and quant_type == QuantType.BINARY:
             tensor_quant = BinaryQuant(scaling_impl=scaling_impl)
 
         elif bit_width == 2 and quant_type == QuantType.TERNARY:
@@ -222,6 +222,7 @@ def _weight_quant_init_impl(bit_width: Optional[int],
             raise Exception('Unsupported weight quantization: {} bit width, {} quantization.'
                             .format(bit_width, str(quant_type)))
     return tensor_quant
+
 
 
 @docstrings.get_sectionsf('weight_quant_proxy')
