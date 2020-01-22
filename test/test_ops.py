@@ -43,13 +43,15 @@ import math
 import brevitas.function.ops as ops
 import pytest
 import hypothesis.strategies as st
-from hypothesis import assume, given, note
+from hypothesis import assume, given, note, example
 from hypothesis import seed as set_seed
-from hypothesis import settings
+from hypothesis import settings, HealthCheck
 
+settings.register_profile("standard", deadline=None, suppress_health_check=[HealthCheck.too_slow])
+settings.load_profile("standard")
 SEED = 123456
 RTOL = 1e-03
-ATOL = 1e-03
+ATOL = 1e-02
 
 torch.random.manual_seed(SEED)
 set_seed(SEED)
@@ -57,12 +59,12 @@ set_seed(SEED)
 #  Define custom type of floating point generator
 float_st = st.floats(allow_nan=False, allow_infinity=False, width=32)
 float_st_nz = st.floats(allow_nan=False, allow_infinity=False, width=32).filter(lambda x: x != 0.0)
-
+float_st_noextreme = float_st.filter(lambda x: 16777218.0 > math.fabs(x) > -2.2204e-16)
 
 # Create custom strategy for generating two lists of floats with equal size
 @st.composite
 def two_lists_equal_size(draw):
-    list_one = draw(st.lists(float_st, min_size=1))
+    list_one = draw(st.lists(float_st_noextreme, min_size=1))
     size = len(list_one)
     list_two = draw(st.lists(float_st_nz, min_size=size, max_size=size))
     return list_one, list_two
@@ -71,22 +73,41 @@ def two_lists_equal_size(draw):
 # Create custom strategy for generating three floating point numbers such that minimum < value < maximum
 @st.composite
 def two_ordered_numbers(draw):
-    minimum = draw(float_st)
+    minimum = draw(float_st_noextreme)
     maximum = draw(
-        st.floats(allow_infinity=False, allow_nan=False, width=32, min_value=minimum).filter(lambda x: x != 0.0))
+        st.floats(allow_infinity=False, allow_nan=False, width=32, min_value=minimum).filter(lambda x: 16777218.0 > math.fabs(x) > -2.2204e-16))
     return minimum, maximum
 
 
 @st.composite
-def two_ordered_lists(draw):
-    size = draw(st.integers().filter(lambda x: not math.isinf(x) or not math.isnan(x)))
+def tensor_clamp_input(draw):
+    size = 10
     minimum_list = [0] * size
     maximum_list = [0] * size
     for i in range(size):
-        minimum, maximum = draw(two_ordered_numbers)
+        minimum = draw(float_st_noextreme)
+        maximum = draw(
+            st.floats(allow_infinity=False, allow_nan=False, width=32, min_value=minimum))
         minimum_list[i] = minimum
         maximum_list[i] = maximum
-    return minimum_list, maximum_list
+    values = draw(st.lists(float_st_noextreme, min_size=size, max_size=size))
+    return minimum_list, values, maximum_list
+
+
+@st.composite
+def tensor_clamp_ste_input(draw):
+    size = 10
+    minimum_list = [0] * size
+    maximum_list = [0] * size
+    for i in range(size):
+        minimum = draw(float_st_noextreme)
+        maximum = draw(
+            st.floats(allow_infinity=False, allow_nan=False, width=32, min_value=minimum))
+        minimum_list[i] = minimum
+        maximum_list[i] = maximum
+    values = draw(st.lists(float_st_noextreme, min_size=size, max_size=size))
+    grad = draw(st.lists(float_st_nz, min_size=size, max_size=size))
+    return minimum_list, values, grad, maximum_list
 
 
 @given(lists=two_lists_equal_size())
@@ -113,17 +134,35 @@ def test_result_of_round_ste(x):
     assert (torch.allclose(expected_output, output, RTOL, ATOL))
 
 
-@given(minmax=two_ordered_numbers(), x=st.lists(float_st, min_size=1))
-def test_result_of_tensor_clamp(minmax, x):
-    minimum = torch.tensor(minmax[0])
-    value = torch.tensor(x)
-    maximum = torch.tensor(minmax[1])
+@given(x=tensor_clamp_input())
+def test_result_of_tensor_clamp(x):
+    minimum = torch.tensor(x[0])
+    value = torch.tensor(x[1])
+    maximum = torch.tensor(x[2])
 
     output = ops.tensor_clamp(value, minimum, maximum)
-    expected_output = torch.clamp(value, minmax[0], minmax[1])  # torch.clamp requires float and not tensor as arguments
-    assert ((output >= minimum).all() and (output <= maximum).all())
+    expected_output = []
+    for i in range(minimum.size()[0]):
+        expected_output.append(torch.clamp(value[i], x[0][i], x[2][i]))
+    expected_output = torch.tensor(expected_output)
+
+    # assert ((output >= minimum).all() and (output <= maximum).all())
     assert (torch.allclose(expected_output, output, RTOL, ATOL))
 
+
+@given(x=tensor_clamp_ste_input())
+def test_ste_of_tensor_clamp_ste(x):
+    minimum = torch.tensor(x[0])
+    value = torch.tensor(x[1], requires_grad=True)
+    grad = x[2]
+    grad = torch.tensor(grad)
+    maximum = torch.tensor(x[3])
+
+    output = ops.tensor_clamp_ste(value, minimum, maximum)
+
+    output.backward(grad, retain_graph=True)
+
+    assert (torch.allclose(value.grad, grad, RTOL, ATOL))
 
 @given(narrow_range=st.booleans(), bit_width=st.integers(min_value=0, max_value=8))
 def test_result_of_max_uint(narrow_range, bit_width):
@@ -173,16 +212,27 @@ def test_result_of_max_int(narrow_range, signed, bit_width):
     assert (torch.allclose(expected_output, output, RTOL, ATOL))
 
 
-@given(minmax=two_ordered_numbers(), lists=two_lists_equal_size())
-@settings(deadline=None)
-def test_ste_of_round_ste(minmax, lists):
+@given(minmax=two_ordered_numbers(), x=st.lists(float_st_noextreme, min_size=1))
+def test_result_of_scalar_clamp_ste(minmax, x):
     minimum = torch.tensor(minmax[0])
-    value = torch.tensor(lists[0], requires_grad=True)
-    grad = lists[1]
-    grad = torch.tensor(grad)
+    value = torch.tensor(x)
     maximum = torch.tensor(minmax[1])
 
-    output = ops.tensor_clamp_ste(value, minimum, maximum)
+    output = ops.scalar_clamp_ste(value, minimum, maximum)
+    expected_output = torch.clamp(value, minmax[0], minmax[1])
+
+    # assert ((output >= minimum).all() and (output <= maximum).all())
+    assert (torch.allclose(expected_output, output, RTOL, ATOL))
+
+
+@given(minmax=two_ordered_numbers(), x=two_lists_equal_size())
+def test_ste_of_scalar_clamp_ste(minmax, x):
+    minimum = torch.tensor(minmax[0])
+    value = torch.tensor(x[0], requires_grad=True)
+    grad = torch.tensor(x[1])
+    maximum = torch.tensor(minmax[1])
+
+    output = ops.scalar_clamp_ste(value, minmax[0], minmax[1])
 
     output.backward(grad, retain_graph=True)
 
