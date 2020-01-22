@@ -44,7 +44,7 @@ from setuptools import setup, find_packages
 
 
 INSTALL_REQUIRES = ["torch>=1.1.0", "docrep", "scipy"]
-TEST_REQUIRES = ["pytest"]
+TEST_REQUIRES = ["pytest", "hypothesis", "mock"]
 
 
 def read(fname):
