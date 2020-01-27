@@ -51,7 +51,7 @@ settings.register_profile("standard", deadline=None, suppress_health_check=[Heal
 settings.load_profile("standard")
 SEED = 123456
 RTOL = 1e-03
-ATOL = 1e-02
+ATOL = 1e-03
 
 torch.random.manual_seed(SEED)
 set_seed(SEED)
@@ -110,18 +110,18 @@ def tensor_clamp_ste_input(draw):
     return minimum_list, values, grad, maximum_list
 
 
-@given(lists=two_lists_equal_size())
+@given(x=two_lists_equal_size())
 @settings(deadline=None)
-def test_ste_of_round_ste(lists):
-    x = lists[0]
-    grad = lists[1]
-    x = torch.tensor(x, requires_grad=True)
+def test_ste_of_round_ste(x):
+    value = x[0]
+    grad = x[1]
+    value = torch.tensor(value, requires_grad=True)
     grad = torch.tensor(grad)
 
-    output = ops.round_ste(x)
+    output = ops.round_ste(value)
     output.backward(grad, retain_graph=True)
 
-    assert (torch.allclose(x.grad, grad, RTOL, ATOL))
+    assert (torch.allclose(grad, value.grad, RTOL, ATOL))
 
 
 @given(x=st.lists(float_st, min_size=1))
@@ -146,7 +146,7 @@ def test_result_of_tensor_clamp(x):
         expected_output.append(torch.clamp(value[i], x[0][i], x[2][i]))
     expected_output = torch.tensor(expected_output)
 
-    # assert ((output >= minimum).all() and (output <= maximum).all())
+    assert ((output >= minimum).all() and (output <= maximum).all())
     assert (torch.allclose(expected_output, output, RTOL, ATOL))
 
 
@@ -162,7 +162,7 @@ def test_ste_of_tensor_clamp_ste(x):
 
     output.backward(grad, retain_graph=True)
 
-    assert (torch.allclose(value.grad, grad, RTOL, ATOL))
+    assert (torch.allclose(grad, value.grad, RTOL, ATOL))
 
 @given(narrow_range=st.booleans(), bit_width=st.integers(min_value=0, max_value=8))
 def test_result_of_max_uint(narrow_range, bit_width):
@@ -195,7 +195,7 @@ def test_result_of_max_int(signed, bit_width):
 
 
 @given(narrow_range=st.booleans(), signed=st.booleans(), bit_width=st.integers(min_value=0, max_value=8))
-def test_result_of_max_int(narrow_range, signed, bit_width):
+def test_result_of_min_int(narrow_range, signed, bit_width):
     bit_width = torch.tensor(bit_width, dtype=torch.float)
     output = ops.min_int(signed, narrow_range, bit_width)
 
@@ -212,7 +212,7 @@ def test_result_of_max_int(narrow_range, signed, bit_width):
     assert (torch.allclose(expected_output, output, RTOL, ATOL))
 
 
-@given(minmax=two_ordered_numbers(), x=st.lists(float_st_noextreme, min_size=1))
+@given(minmax=two_ordered_numbers(), x=st.lists(float_st, min_size=1))
 def test_result_of_scalar_clamp_ste(minmax, x):
     minimum = torch.tensor(minmax[0])
     value = torch.tensor(x)
@@ -221,19 +221,61 @@ def test_result_of_scalar_clamp_ste(minmax, x):
     output = ops.scalar_clamp_ste(value, minimum, maximum)
     expected_output = torch.clamp(value, minmax[0], minmax[1])
 
-    # assert ((output >= minimum).all() and (output <= maximum).all())
+    assert ((output >= minimum).all() and (output <= maximum).all())
     assert (torch.allclose(expected_output, output, RTOL, ATOL))
 
 
 @given(minmax=two_ordered_numbers(), x=two_lists_equal_size())
 def test_ste_of_scalar_clamp_ste(minmax, x):
-    minimum = torch.tensor(minmax[0])
+    minimum = minmax[0]
     value = torch.tensor(x[0], requires_grad=True)
     grad = torch.tensor(x[1])
-    maximum = torch.tensor(minmax[1])
+    maximum = minmax[1]
 
-    output = ops.scalar_clamp_ste(value, minmax[0], minmax[1])
+    output = ops.scalar_clamp_ste_fn.apply(value, minimum, maximum)
 
     output.backward(grad, retain_graph=True)
+    assert (torch.allclose(grad, value.grad, RTOL, ATOL))
 
-    assert (torch.allclose(value.grad, grad, RTOL, ATOL))
+
+@given(x=st.lists(float_st, min_size=1))
+def test_result_of_ceil_ste(x):
+    value = torch.tensor(x)
+    output = ops.ceil_ste(x)
+    expected_output = torch.ceil(value)
+    assert(torch.allclose(expected_output, output, RTOL, ATOL))
+
+
+@given(x=st.lists(float_st, min_size=1))
+def test_result_of_floor_ste(x):
+    value = torch.tensor(x)
+    output = ops.floor_ste(x)
+    expected_output = torch.floor(value)
+    assert(torch.allclose(expected_output, output, RTOL, ATOL))
+
+
+@given(x=two_lists_equal_size)
+def test_ste_of_ceil_ste(x):
+    value = torch.tensor(x[0], requires_grad=True)
+    grad = x[1]
+
+    output = torch.ceil(value)
+    output.backward(grad)
+    assert (torch.allclose(grad, value.grad, RTOL, ATOL))
+
+
+@given(x=two_lists_equal_size)
+def test_ste_of_floor_ste(x):
+    value = torch.tensor(x[0], requires_grad=True)
+    grad = x[1]
+
+    output = torch.floor(value)
+    output.backward(grad)
+    assert (torch.allclose(grad, value.grad, RTOL, ATOL))
+
+
+@given(x=st.lists(float_st, min_size=1))
+def test_result_of_binary_sign_ste(x):
+    value = torch.tensor(x)
+    output = ops.binary_sign_ste(value)
+    expected_otuput =
