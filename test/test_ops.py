@@ -274,8 +274,8 @@ def test_ste_of_floor_ste(x):
     assert (torch.allclose(grad, value.grad, RTOL, ATOL))
 
 
-@given(x=st.lists(float_st, min_size=1))
-def test_result_of_binary_sign_ste(x):
-    value = torch.tensor(x)
-    output = ops.binary_sign_ste(value)
-    expected_otuput =
+# @given(x=st.lists(float_st, min_size=1))
+# def test_result_of_binary_sign_ste(x):
+#     value = torch.tensor(x)
+#     output = ops.binary_sign_ste(value)
+#     expected_otuput =

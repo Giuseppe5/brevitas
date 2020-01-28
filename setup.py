@@ -38,10 +38,79 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-import os
-
 from setuptools import setup, find_packages
+import os
+import io
+import torch
+from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
+from pkg_resources import get_distribution, DistributionNotFound
+import glob
+import sys
+import distutils.command.clean
+import distutils.spawn
+import shutil
 
+def read(*names, **kwargs):
+    with io.open(
+            os.path.join(os.path.dirname(__file__), *names),
+            encoding=kwargs.get("encoding", "utf8")
+    ) as fp:
+        return fp.read()
+
+
+def get_dist(pkgname):
+    try:
+        return get_distribution(pkgname)
+    except DistributionNotFound:
+        return None
+
+
+def get_extensions():
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    extensions_dir = os.path.join(this_dir, 'brevitas', 'csrc')
+
+    main_file = glob.glob(os.path.join(extensions_dir, '*.cpp'))
+    source_cpu = glob.glob(os.path.join(extensions_dir, 'cpu', '*.cpp'))
+    sources = main_file + source_cpu
+    extension = CppExtension
+
+    define_macros = []
+
+    extra_compile_args = {}
+
+    if sys.platform == 'win32':
+        define_macros += [('brevitas_EXPORTS', None)]
+        extra_compile_args.setdefault('cxx', [])
+        extra_compile_args['cxx'].append('/MP')
+    sources = [os.path.join(extensions_dir, s) for s in sources]
+    print("SOURCES SOURCES --------------------------------")
+    print(sources)
+    include_dirs = [extensions_dir]
+    ext_modules = [
+        extension(
+            'brevitas._C',
+            sources,
+            include_dirs=include_dirs,
+            define_macros=define_macros,
+            extra_compile_args=extra_compile_args,
+        )
+    ]
+    return ext_modules
+
+
+class clean(distutils.command.clean.clean):
+    def run(self):
+        with open('.gitignore', 'r') as f:
+            ignores = f.read()
+            for wildcard in filter(None, ignores.split('\n')):
+                for filename in glob.glob(wildcard):
+                    try:
+                        os.remove(filename)
+                    except OSError:
+                        shutil.rmtree(filename, ignore_errors=True)
+
+        # It's an old-style class in Python 2.7...
+        distutils.command.clean.clean.run(self)
 
 INSTALL_REQUIRES = ["torch>=1.1.0", "docrep", "scipy"]
 TEST_REQUIRES = ["pytest", "hypothesis", "mock"]
@@ -60,6 +129,13 @@ setup(name="Brevitas",
       python_requires=">=3.6",
       install_requires=INSTALL_REQUIRES,
       extras_require={
-            "test": TEST_REQUIRES,
+          "test": TEST_REQUIRES,
       },
-      packages=find_packages())
+      packages=find_packages(),
+      zip_safe=False,
+      ext_modules=get_extensions(),
+      cmdclass={
+          'build_ext': BuildExtension.with_options(no_python_abi_suffix=True),
+          'clean': clean,
+      }
+      )
