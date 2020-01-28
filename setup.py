@@ -42,13 +42,37 @@ from setuptools import setup, find_packages
 import os
 import io
 import torch
-from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
+from torch.utils.cpp_extension import BuildExtension, CppExtension
 from pkg_resources import get_distribution, DistributionNotFound
+from setuptools.command.build_py import build_py as build_py_orig
+import fnmatch
+from packaging import version
 import glob
 import sys
 import distutils.command.clean
 import distutils.spawn
 import shutil
+
+torch_version = version.parse(torch.__version__)
+
+
+class build_py(build_py_orig):
+    def find_package_modules(self, package, package_dir):
+        print("ENTRO QUA")
+        modules = super().find_package_modules(package, package_dir)
+        if torch_version == version.parse("1.4.0"):
+            pacchetti = [(pkg, mod, file, ) for (pkg, mod, file, ) in modules
+                        if not any(fnmatch.fnmatchcase(mod, pat=pattern)
+                        for pattern in ['ops_ste_o'])]
+            print(pacchetti)
+            return pacchetti
+        elif torch_version < version.parse("1.4.0"):
+            pacchetti = [(pkg, mod, file, ) for (pkg, mod, file, ) in modules
+                        if not any(fnmatch.fnmatchcase(mod, pat=pattern)
+                        for pattern in ['ops_ste_n'])]
+            print(pacchetti)
+            return pacchetti
+
 
 def read(*names, **kwargs):
     with io.open(
@@ -66,36 +90,39 @@ def get_dist(pkgname):
 
 
 def get_extensions():
-    this_dir = os.path.dirname(os.path.abspath(__file__))
-    extensions_dir = os.path.join(this_dir, 'brevitas', 'csrc')
+    if torch_version == version.parse("1.4.0"):
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        extensions_dir = os.path.join(this_dir, 'brevitas', 'csrc')
 
-    main_file = glob.glob(os.path.join(extensions_dir, '*.cpp'))
-    source_cpu = glob.glob(os.path.join(extensions_dir, 'cpu', '*.cpp'))
-    sources = main_file + source_cpu
-    extension = CppExtension
+        main_file = glob.glob(os.path.join(extensions_dir, '*.cpp'))
+        source_cpu = glob.glob(os.path.join(extensions_dir, 'cpu', '*.cpp'))
+        sources = main_file + source_cpu
+        extension = CppExtension
 
-    define_macros = []
+        define_macros = []
 
-    extra_compile_args = {}
+        extra_compile_args = {}
 
-    if sys.platform == 'win32':
-        define_macros += [('brevitas_EXPORTS', None)]
-        extra_compile_args.setdefault('cxx', [])
-        extra_compile_args['cxx'].append('/MP')
-    sources = [os.path.join(extensions_dir, s) for s in sources]
-    print("SOURCES SOURCES --------------------------------")
-    print(sources)
-    include_dirs = [extensions_dir]
-    ext_modules = [
-        extension(
-            'brevitas._C',
-            sources,
-            include_dirs=include_dirs,
-            define_macros=define_macros,
-            extra_compile_args=extra_compile_args,
-        )
-    ]
-    return ext_modules
+        if sys.platform == 'win32':
+            define_macros += [('brevitas_EXPORTS', None)]
+            extra_compile_args.setdefault('cxx', [])
+            extra_compile_args['cxx'].append('/MP')
+        sources = [os.path.join(extensions_dir, s) for s in sources]
+        print("SOURCES SOURCES --------------------------------")
+        print(sources)
+        include_dirs = [extensions_dir]
+        ext_modules = [
+            extension(
+                'brevitas._C',
+                sources,
+                include_dirs=include_dirs,
+                define_macros=define_macros,
+                extra_compile_args=extra_compile_args,
+            )
+        ]
+        return ext_modules
+    elif torch_version < version.parse("1.4.0"):
+        return []
 
 
 class clean(distutils.command.clean.clean):
@@ -112,13 +139,25 @@ class clean(distutils.command.clean.clean):
         # It's an old-style class in Python 2.7...
         distutils.command.clean.clean.run(self)
 
-INSTALL_REQUIRES = ["torch>=1.1.0", "docrep", "scipy"]
+
+INSTALL_REQUIRES = ["torch>=1.1.0", "docrep", "scipy", "packaging"]
 TEST_REQUIRES = ["pytest", "hypothesis", "mock"]
 
 
 def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
+
+if torch_version == version.parse("1.4.0"):
+    cmdclass_dict = {
+        'build_ext': BuildExtension.with_options(no_python_abi_suffix=True),
+        'clean': clean,
+        'build_py': build_py
+    }
+elif torch_version < version.parse("1.4.0"):
+    cmdclass_dict = {
+        'build_py': build_py
+    }
 
 setup(name="Brevitas",
       version="0.2.0-alpha",
@@ -132,10 +171,8 @@ setup(name="Brevitas",
           "test": TEST_REQUIRES,
       },
       packages=find_packages(),
+
       zip_safe=False,
       ext_modules=get_extensions(),
-      cmdclass={
-          'build_ext': BuildExtension.with_options(no_python_abi_suffix=True),
-          'clean': clean,
-      }
+      cmdclass=cmdclass_dict
       )
