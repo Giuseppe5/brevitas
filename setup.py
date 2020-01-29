@@ -63,7 +63,6 @@ class build_py(build_py_orig):
             pacchetti = [(pkg, mod, file, ) for (pkg, mod, file, ) in modules
                         if not any(fnmatch.fnmatchcase(mod, pat=pattern)
                         for pattern in ['ops_ste_o'])]
-            print(pacchetti)
             return pacchetti
         elif torch_version < version.parse("1.4.0"):
             pacchetti = [(pkg, mod, file, ) for (pkg, mod, file, ) in modules
@@ -72,15 +71,12 @@ class build_py(build_py_orig):
             return pacchetti
 
     def build_module(self, module, module_file, package):
-        print("AAAA--------------------------------------")
-        print(module, module_file, package)
         output_module_file = module_file
         head, tail = os.path.split(output_module_file)
         output_module_file = tail
         if output_module_file == 'ops_ste_n.py' or output_module_file == 'ops_ste_o.py':
             tail = 'ops_ste.py'
             output_module_file = tail
-            print(output_module_file)
         if isinstance(package, str):
             package = package.split('.')
         elif not isinstance(package, (list, tuple)):
@@ -91,12 +87,10 @@ class build_py(build_py_orig):
         # easy, we just copy it somewhere under self.build_lib (the build
         # directory for Python source).
         outfile = self.get_module_outfile(self.build_lib, package, module)
-        print("OUTFILE")
-        print(outfile)
+
         head, tail = os.path.split(outfile)
         outfile = os.path.join(head, output_module_file)
-        print("OUTFILE AFTER")
-        print(outfile)
+
         dir = os.path.dirname(outfile)
         self.mkpath(dir)
         return self.copy_file(module_file, outfile, preserve_mode=0)
@@ -136,8 +130,6 @@ def get_extensions():
             extra_compile_args.setdefault('cxx', [])
             extra_compile_args['cxx'].append('/MP')
         sources = [os.path.join(extensions_dir, s) for s in sources]
-        print("SOURCES SOURCES --------------------------------")
-        print(sources)
         include_dirs = [extensions_dir]
         ext_modules = [
             extension(
