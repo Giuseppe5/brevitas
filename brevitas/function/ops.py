@@ -47,7 +47,6 @@ def tensor_clamp(x: torch.Tensor, min_val: torch.Tensor, max_val: torch.Tensor) 
 
         Parameters
         ----------
-
         x : Tensor
             Tensor on which to apply the clamp operation
         min_val : Tensor
@@ -57,7 +56,6 @@ def tensor_clamp(x: torch.Tensor, min_val: torch.Tensor, max_val: torch.Tensor) 
 
         Returns
         -------
-
         Tensor
             Tensor for which every element of `x` is clamped between the corresponding minimum and maximum values.
     """
@@ -74,18 +72,35 @@ def tensor_clamp_(x: torch.Tensor, min_val: torch.Tensor, max_val: torch.Tensor)
 
 
 def ceil_ste(x: torch.Tensor) -> torch.Tensor:
+    """ Perform ceil operation with Straight Trough Estimation (STE) of the Gradient
+
+    This operation has no effect on the backpropagation of the gradient. The STE is implemented using the
+    torch.autograd.Function class in python, due to some unexpected behaviour of at::ceil implementation in C++
+
+    Parameters
+    ----------
+    x : Tensor
+        Tensor on which to apply the ceil operation
+
+    Returns
+    -------
+    Tensor
+        Tensor after applying ceil operation. When backpropagating, the gradient will be unaffected by the ceil
+        operation
+
+    """
     return ceil_ste_fn.apply(x)
 
 
 def floor_ste(x: torch.Tensor) -> torch.Tensor:
-    """ Perform floor operation with Straight Trough Estimatation of the Gradient
+    """ Perform floor operation with Straight Trough Estimation (STE) of the Gradient
 
     This operation has no effect on the backpropagation of the gradient. The STE is implemented using the
     torch.autograd.Function class in python, due to some unexpected behaviour of at::floor implementation in C++
 
     Parameters
     ----------
-    x
+    x : Tensor
         Tensor on which to apply the floor operation
 
     Returns

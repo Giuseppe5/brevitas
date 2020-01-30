@@ -31,6 +31,16 @@ brevitas.function.ops\_ste module
    :undoc-members:
    :show-inheritance:
 
+   .. autofunction:: round_ste(x)
+   .. autofunction:: tensor_clamp_ste(x, min_val, max_val)
+   .. autofunction:: scalar_clamp_ste(x, min_val, max_val)
+   .. autofunction:: binary_sign_ste(x)
+   .. autofunction:: ternary_sign_ste(x)
+   .. autofunction:: max_uint(narrow_range, bit_width)
+   .. autofunction:: max_int(signed, bit_width)
+   .. autofunction:: min_int(signed, narrow_range, bit_width)
+
+
 brevitas.function.shape module
 ------------------------------
 
