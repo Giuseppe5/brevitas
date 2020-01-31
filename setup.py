@@ -59,37 +59,34 @@ torch_version = version.parse(torch.__version__)
 class build_py(build_py_orig):
     def find_package_modules(self, package, package_dir):
         modules = super().find_package_modules(package, package_dir)
-        if torch_version == version.parse("1.4.0"):
-            pacchetti = [(pkg, mod, file, ) for (pkg, mod, file, ) in modules
-                        if not any(fnmatch.fnmatchcase(mod, pat=pattern)
-                        for pattern in ['ops_ste_o'])]
-            return pacchetti
-        elif torch_version < version.parse("1.4.0"):
-            pacchetti = [(pkg, mod, file, ) for (pkg, mod, file, ) in modules
-                        if not any(fnmatch.fnmatchcase(mod, pat=pattern)
-                        for pattern in ['ops_ste_n'])]
-            return pacchetti
+        if torch_version >= version.parse("1.3.0"):
+            file_to_rename = ['ops_ste_o']
+        else:
+            file_to_rename = ['ops_ste_n']
+
+        pacchetti = [(pkg, mod, file,) for (pkg, mod, file,) in modules
+                     if not any(fnmatch.fnmatchcase(mod, pat=pattern)
+                                for pattern in file_to_rename)]
+        return pacchetti
+
 
     def build_module(self, module, module_file, package):
-        output_module_file = module_file
-        head, tail = os.path.split(output_module_file)
-        output_module_file = tail
-        if output_module_file == 'ops_ste_n.py' or output_module_file == 'ops_ste_o.py':
-            tail = 'ops_ste.py'
-            output_module_file = tail
+        _, file_name = os.path.split(module_file)
+        if file_name == 'ops_ste_n.py' or file_name == 'ops_ste_o.py':
+            file_name = 'ops_ste.py'
         if isinstance(package, str):
             package = package.split('.')
         elif not isinstance(package, (list, tuple)):
             raise TypeError(
-                  "'package' must be a string (dot-separated), list, or tuple")
+                "'package' must be a string (dot-separated), list, or tuple")
 
         # Now put the module source file into the "build" area -- this is
         # easy, we just copy it somewhere under self.build_lib (the build
         # directory for Python source).
         outfile = self.get_module_outfile(self.build_lib, package, module)
 
-        head, tail = os.path.split(outfile)
-        outfile = os.path.join(head, output_module_file)
+        head, _ = os.path.split(outfile)
+        outfile = os.path.join(head, file_name)
 
         dir = os.path.dirname(outfile)
         self.mkpath(dir)
@@ -112,7 +109,7 @@ def get_dist(pkgname):
 
 
 def get_extensions():
-    if torch_version == version.parse("1.4.0"):
+    if torch_version >= version.parse("1.3.0"):
         this_dir = os.path.dirname(os.path.abspath(__file__))
         extensions_dir = os.path.join(this_dir, 'brevitas', 'csrc')
 
@@ -141,7 +138,7 @@ def get_extensions():
             )
         ]
         return ext_modules
-    elif torch_version < version.parse("1.4.0"):
+    else:
         return []
 
 
@@ -168,13 +165,13 @@ def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
 
-if torch_version == version.parse("1.4.0"):
+if torch_version >= version.parse("1.3.0"):
     cmdclass_dict = {
         'build_ext': BuildExtension.with_options(no_python_abi_suffix=True),
         'clean': clean,
         'build_py': build_py
     }
-elif torch_version < version.parse("1.4.0"):
+else:
     cmdclass_dict = {
         'build_py': build_py
     }
