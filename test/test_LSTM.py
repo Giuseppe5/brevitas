@@ -31,8 +31,8 @@ class TestLSTMQuant:
                            torch.randn(BATCH, HIDDEN))
 
         q_lstm = torch.jit.script(QuantLSTMLayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
-                                                 weight_config=weight_config))
-
+                                                 weight_config=weight_config, layer_norm='decompose'))
+        q_lstm.eval()
 
         # Control
         lstm = torch.nn.LSTM(INPUT_SIZE, HIDDEN, 1)
