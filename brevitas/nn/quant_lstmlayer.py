@@ -115,9 +115,9 @@ class _IncompatibleKeys(namedtuple('IncompatibleKeys', ['missing_keys', 'unexpec
     __str__ = __repr__
 
 
-class TensorNorm(nn.Module):
+class LayerNorm(nn.Module):
     def __init__(self, normalized_shape, eps=1e-5, momentum=0.01):
-        super(TensorNorm, self).__init__()
+        super(LayerNorm, self).__init__()
         # if isinstance(normalized_shape, numbers.Integral):
         #     normalized_shape = (normalized_shape,)
         # normalized_shape = torch.Size(normalized_shape)
@@ -205,8 +205,6 @@ class QuantLSTMLayer(nn.Module):
         self.reverse_input = reverse_input
 
         self.layer_norm = layer_norm
-
-        # TODO Fix this
         if self.layer_norm == 'identity':
             self.layernorm_ii, self.layernorm_fi, self.layernorm_ai, self.layernorm_oi = \
                 torch.jit.script(IdentityBias(hidden_size)), torch.jit.script(IdentityBias(hidden_size)), \
@@ -217,10 +215,15 @@ class QuantLSTMLayer(nn.Module):
             self.layernorm_c = torch.jit.script(nn.Identity())
         elif self.layer_norm == 'decompose':
             self.layernorm_i, self.layernorm_f, self.layernorm_a, self.layernorm_o = \
-                torch.jit.script(TensorNorm(hidden_size)), torch.jit.script(TensorNorm(hidden_size)), \
-                torch.jit.script(TensorNorm(hidden_size)), torch.jit.script(TensorNorm(hidden_size))
+                torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size)), \
+                torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size))
+            # self.layernorm_ii, self.layernorm_fi, self.layernorm_ai, self.layernorm_oi = \
+            #     torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size)), \
+            #     torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size))
+            # self.layernorm_ih, self.layernorm_fh, self.layernorm_ah, self.layernorm_oh = \
+            #     torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size)), \
+            #     torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size))
             self.layernorm_c = torch.jit.script(LayerNorm(hidden_size))
-        # TODO Fix this
         else:
             self.layernorm_ii, self.layernorm_fi, self.layernorm_ai, self.layernorm_oi = \
                 nn.LayerNorm(hidden_size), nn.LayerNorm(hidden_size), \
