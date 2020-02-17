@@ -31,13 +31,13 @@ class TestLSTMQuant:
                            torch.randn(BATCH, HIDDEN))
 
         q_lstm = torch.jit.script(QuantLSTMLayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
-                                                 weight_config=weight_config, layer_norm='decompose'))
+                                                 weight_config=weight_config, layer_norm='decompose', batch=BATCH))
         q_lstm.eval()
 
         # Control
         lstm = torch.nn.LSTM(INPUT_SIZE, HIDDEN, 1)
         lstm_state = LSTMState(states.hx.unsqueeze(0), states.cx.unsqueeze(0))
-        q_lstm.load_state_dict_new(lstm.state_dict())
+        # q_lstm.load_state_dict_new(lstm.state_dict())
         lstm_out, lstm_out_state = lstm(input, lstm_state)
         start = time.time()
         out, custom_state = q_lstm(input, states)
