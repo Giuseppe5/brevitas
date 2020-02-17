@@ -114,6 +114,19 @@ class _IncompatibleKeys(namedtuple('IncompatibleKeys', ['missing_keys', 'unexpec
 
     __str__ = __repr__
 
+class PropNorm(nn.Module):
+    def __init__(self):
+        super(PropNorm, self).__init__()
+        self.weight = nn.Parameter(torch.tensor(1.0), requires_grad=True)
+
+    def forward(self, input, weight):
+
+        weight = weight/weight.norm(p=2, dim=1).view(-1, 1)
+        input = torch.mm(input, weight.t())
+        input = input * self.weight
+        return input
+
+
 
 class LayerNorm(nn.Module):
     def __init__(self, normalized_shape, eps=1e-5, momentum=0.01):
@@ -132,6 +145,7 @@ class LayerNorm(nn.Module):
         self.running_var.fill_(1)
 
     # @jit.script_method
+    # TODO doesn't work
     def forward(self, input):
         if self.training:
             mean = input.mean()
@@ -144,7 +158,6 @@ class LayerNorm(nn.Module):
             return output
         else:
             return (input-self.running_mean) * (1/(self.running_var+self.eps).pow(0.5)) * self.weight
-
 
 
 class IdentityBias(nn.Module):
@@ -214,24 +227,9 @@ class QuantLSTMLayer(nn.Module):
                 torch.jit.script(IdentityBias(hidden_size)), torch.jit.script(IdentityBias(hidden_size))
             self.layernorm_c = torch.jit.script(nn.Identity())
         elif self.layer_norm == 'decompose':
-            self.layernorm_i, self.layernorm_f, self.layernorm_a, self.layernorm_o = \
-                torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size)), \
-                torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size))
-            # self.layernorm_ii, self.layernorm_fi, self.layernorm_ai, self.layernorm_oi = \
-            #     torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size)), \
-            #     torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size))
-            # self.layernorm_ih, self.layernorm_fh, self.layernorm_ah, self.layernorm_oh = \
-            #     torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size)), \
-            #     torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size))
-            self.layernorm_c = torch.jit.script(LayerNorm(hidden_size))
+            self.layernorm_i, self.layernorm_h = torch.jit.script(PropNorm()), torch.jit.script(PropNorm())
         else:
-            self.layernorm_ii, self.layernorm_fi, self.layernorm_ai, self.layernorm_oi = \
-                nn.LayerNorm(hidden_size), nn.LayerNorm(hidden_size), \
-                nn.LayerNorm(hidden_size), nn.LayerNorm(hidden_size)
-            self.layernorm_ih, self.layernorm_fh, self.layernorm_ah, self.layernorm_oh = \
-                nn.LayerNorm(hidden_size), nn.LayerNorm(hidden_size), \
-                nn.LayerNorm(hidden_size), nn.LayerNorm(hidden_size)
-            self.layernorm_c = nn.LayerNorm(hidden_size)
+            self.layernorm_i, self.layernorm_h = torch.jit.script(PropNorm()), torch.jit.script(PropNorm())
 
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
@@ -242,10 +240,7 @@ class QuantLSTMLayer(nn.Module):
         self.weight_proxy_f = self.configure_weight([self.weight_fi, self.weight_fh], self.weight_config)
         self.weight_proxy_a = self.configure_weight([self.weight_ai, self.weight_ah], self.weight_config)
         self.weight_proxy_o = self.configure_weight([self.weight_oi, self.weight_oh], self.weight_config)
-        # self.weight_proxy_ih, self.bias_proxy = self.configure_weight([self.weight_ih], self.weight_config)
-        # self.weight_proxy_fh, self.bias_proxy = self.configure_weight([self.weight_fh], self.weight_config)
-        # self.weight_proxy_ah, self.bias_proxy = self.configure_weight([self.weight_ah], self.weight_config)
-        # self.weight_proxy_oh, self.bias_proxy = self.configure_weight([self.weight_oh], self.weight_config)
+
 
         self.quant_sigmoid = self.configure_activation(self.activation_config, QuantSigmoid)
         self.quant_tanh = self.configure_activation(self.activation_config, QuantTanh)
@@ -273,7 +268,6 @@ class QuantLSTMLayer(nn.Module):
         # inputs, input_scale, input_bit_width = self.unpack_input(inputs)
 
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
-        self.print_cose()
 
         quant_weight_ii, quant_weight_ii_scale, quant_weight_ii_bit_width = self.weight_proxy_i(self.weight_ii,
                                                                                                 zero_hw_sentinel)
@@ -293,7 +287,9 @@ class QuantLSTMLayer(nn.Module):
                                                                                                 zero_hw_sentinel)
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
 
-
+        max_time = inputs.shape[0]
+        print("MAX TIME")
+        print(max_time)
         inputs = inputs.unbind(0)
 
         start = 0
@@ -308,38 +304,30 @@ class QuantLSTMLayer(nn.Module):
         outputs = torch.jit.annotate(List[Tensor], [])
         for i in range(start, end, step):
             hx, cx = state
-            # igates_ii = self.layernorm_ii(torch.mm(inputs[i], quant_weight_ii.t()))
-            # igates_fi = self.layernorm_fi(torch.mm(inputs[i], quant_weight_fi.t()))
-            # igates_ai = self.layernorm_ai(torch.mm(inputs[i], quant_weight_ai.t()))
-            # igates_oi = self.layernorm_oi(torch.mm(inputs[i], quant_weight_oi.t()))
-            # hgates_ih = self.layernorm_ih(torch.mm(hx, quant_weight_ih.t()))
-            # hgates_fh = self.layernorm_fh(torch.mm(hx, quant_weight_fh.t()))
-            # hgates_ah = self.layernorm_ah(torch.mm(hx, quant_weight_ah.t()))
-            # hgates_oh = self.layernorm_oh(torch.mm(hx, quant_weight_oh.t()))
-            igates_ii = torch.mm(inputs[i], quant_weight_ii.t())
-            hgates_ih = torch.mm(hx, quant_weight_ih.t())
 
-            igates_fi = torch.mm(inputs[i], quant_weight_fi.t())
-            hgates_fh = torch.mm(hx, quant_weight_fh.t())
+            igates_ii = self.layernorm_i(inputs[i], quant_weight_ii)
+            hgates_ih = self.layernorm_h(hx, quant_weight_ih)
 
-            igates_ai = torch.mm(inputs[i], quant_weight_ai.t())
-            hgates_ah = torch.mm(hx, quant_weight_ah.t())
+            igates_fi = self.layernorm_i(inputs[i], quant_weight_fi)
+            hgates_fh = self.layernorm_h(hx, quant_weight_fh)
 
-            igates_oi = torch.mm(inputs[i], quant_weight_oi.t())
-            hgates_oh = torch.mm(hx, quant_weight_oh.t())
+            igates_ai = self.layernorm_i(inputs[i], quant_weight_ai)
+            hgates_ah = self.layernorm_h(hx, quant_weight_ah)
 
-            ingate = self.layernorm_i(igates_ii + hgates_ih) + self.bias_i
-            forgetgate = self.layernorm_f(igates_fi + hgates_fh) + self.bias_f
-            cellgate = self.layernorm_c(igates_ai + hgates_ah) + self.bias_a
-            outgate = self.layernorm_o(igates_oi + hgates_oh) + self.bias_o
+            igates_oi = self.layernorm_i(inputs[i], quant_weight_oi)
+            hgates_oh = self.layernorm_h(hx, quant_weight_oh)
+
+            ingate = igates_ii + hgates_ih + self.bias_i
+            forgetgate = igates_fi + hgates_fh + self.bias_f
+            cellgate = igates_ai + hgates_ah + self.bias_a
+            outgate = igates_oi + hgates_oh + self.bias_o
 
             ingate, _, _ = self.quant_sigmoid(ingate, zero_hw_sentinel)
             forgetgate, _, _ = self.quant_sigmoid(forgetgate, zero_hw_sentinel)
             cellgate, _, _ = self.quant_tanh(cellgate, zero_hw_sentinel)
             outgate, _, _ = self.quant_sigmoid(outgate, zero_hw_sentinel)
 
-            cy = self.layernorm_c((forgetgate * cx) + (ingate * cellgate))
-
+            cy = (forgetgate * cx) + (ingate * cellgate)
             hy = outgate * self.quant_tanh(cy, zero_hw_sentinel)[0]
             hy1, _, _ = self.out_quant(hy, zero_hw_sentinel)
             hy2, _, _ = self.rec_quant(hy, zero_hw_sentinel)
