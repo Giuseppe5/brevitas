@@ -215,9 +215,8 @@ class QuantLSTMLayer(nn.Module):
         self.bias_o = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
         self.reverse_input = reverse_input
 
-        # TODO
-        self.hidden_init = LSTMState(nn.Parameter(torch.zeros(hidden_size), requires_grad=True),
-                           nn.Parameter(torch.zeros(hidden_size), requires_grad=True))
+        self.hidden_init = nn.Parameter(torch.zeros(hidden_size), requires_grad=True), \
+                           nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
 
         self.layer_norm = layer_norm
         if self.layer_norm == 'identity':
@@ -306,7 +305,6 @@ class QuantLSTMLayer(nn.Module):
             first = False
             if i == start:
                 first = True
-                # TODO Broadcast hidden_init
             hx, cx = state
 
             igates_ii = torch.mm(inputs[i], quant_weight_ii.t())
