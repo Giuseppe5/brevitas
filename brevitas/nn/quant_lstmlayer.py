@@ -135,7 +135,7 @@ class TensorBatchNorm(nn.Module):
         self.running_mean.zero_()
         self.running_var.fill_(1)
 
-    def forward(self, input, first):
+    def forward(self, input: torch.Tensor, first: bool):
         if self.training and not first:
             mean = input.mean()
             unbias_var = input.var(unbiased=True)
@@ -176,8 +176,8 @@ class QuantLSTMLayer(nn.Module):
         self.bias_o = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
         self.reverse_input = reverse_input
 
-        self.hidden_init = nn.Parameter(torch.zeros(hidden_size), requires_grad=True), \
-                           nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
+        self.hidden_init_cx = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
+        self.hidden_init_hx = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
 
         if layer_norm == 'decompose':
             self.layernorm_i, self.layernorm_f, self.layernorm_a, self.layernorm_o = \
