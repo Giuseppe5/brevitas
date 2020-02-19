@@ -114,27 +114,19 @@ class _IncompatibleKeys(namedtuple('IncompatibleKeys', ['missing_keys', 'unexpec
 
     __str__ = __repr__
 
-class PropNorm(nn.Module):
-    def __init__(self):
-        super(PropNorm, self).__init__()
-        self.weight = nn.Parameter(torch.tensor(1.0), requires_grad=True)
+def reverse(lst):
+    # type: (List[Tensor]) -> List[Tensor]
+    out = torch.jit.annotate(List[Tensor], [])
+    start = len(lst) - 1
+    end = -1
+    step = -1
+    for i in range(start, end, step):
+        out += [lst[i]]
+    return out
 
-    def forward(self, input, weight):
-
-        weight = weight/weight.norm(p=2, dim=1).view(-1, 1)
-        input = torch.mm(input, weight.t())
-        input = input * self.weight
-        return input
-
-
-
-class LayerNorm(nn.Module):
-    def __init__(self, normalized_shape, eps=1e-5, momentum=0.1):
-        super(LayerNorm, self).__init__()
-        # if isinstance(normalized_shape, numbers.Integral):
-        #     normalized_shape = (normalized_shape,)
-        # normalized_shape = torch.Size(normalized_shape)
-        # assert len(normalized_shape) == 1
+class TensorBatchNorm(nn.Module):
+    def __init__(self, eps=1e-5, momentum=0.1):
+        super(TensorBatchNorm, self).__init__()
         self.register_buffer('running_mean', torch.zeros(1))
         self.register_buffer('running_var', torch.ones(1))
         self.eps = eps
@@ -143,7 +135,6 @@ class LayerNorm(nn.Module):
         self.running_mean.zero_()
         self.running_var.fill_(1)
 
-    # TODO doesn't work
     def forward(self, input, first):
         if self.training and not first:
             mean = input.mean()
@@ -156,36 +147,6 @@ class LayerNorm(nn.Module):
             return output
         else:
             return (input-self.running_mean) * (1/(self.running_var+self.eps).pow(0.5)) * self.weight
-
-
-class IdentityBias(nn.Module):
-    def __init__(self, normalized_shape):
-        super(IdentityBias, self).__init__()
-        if isinstance(normalized_shape, numbers.Integral):
-            normalized_shape = (normalized_shape,)
-        normalized_shape = torch.Size(normalized_shape)
-
-        # XXX: This is true for our LSTM / NLP use case and helps simplify code
-        assert len(normalized_shape) == 1
-
-        self.bias = nn.Parameter(torch.zeros(normalized_shape))
-        self.normalized_shape = normalized_shape
-
-    # @jit.script_method
-    def forward(self, input):
-        return input + self.bias
-
-
-def reverse(lst):
-    # type: (List[Tensor]) -> List[Tensor]
-    out = torch.jit.annotate(List[Tensor], [])
-    start = len(lst) - 1
-    end = -1
-    step = -1
-    for i in range(start, end, step):
-        out += [lst[i]]
-    return out
-
 
 class QuantLSTMLayer(nn.Module):
     def __init__(self, input_size, hidden_size, weight_config, activation_config, batch=None,
@@ -218,21 +179,14 @@ class QuantLSTMLayer(nn.Module):
         self.hidden_init = nn.Parameter(torch.zeros(hidden_size), requires_grad=True), \
                            nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
 
-        self.layer_norm = layer_norm
-        if self.layer_norm == 'identity':
-            self.layernorm_ii, self.layernorm_fi, self.layernorm_ai, self.layernorm_oi = \
-                torch.jit.script(IdentityBias(hidden_size)), torch.jit.script(IdentityBias(hidden_size)), \
-                torch.jit.script(IdentityBias(hidden_size)), torch.jit.script(IdentityBias(hidden_size))
-            self.layernorm_ih, self.layernorm_fh, self.layernorm_ah, self.layernorm_oh = \
-                torch.jit.script(IdentityBias(hidden_size)), torch.jit.script(IdentityBias(hidden_size)), \
-                torch.jit.script(IdentityBias(hidden_size)), torch.jit.script(IdentityBias(hidden_size))
-            self.layernorm_c = torch.jit.script(nn.Identity())
-        elif self.layer_norm == 'decompose':
+        if layer_norm == 'decompose':
             self.layernorm_i, self.layernorm_f, self.layernorm_a, self.layernorm_o = \
-            torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size)), \
-            torch.jit.script(LayerNorm(hidden_size)), torch.jit.script(LayerNorm(hidden_size)),
+            torch.jit.script(TensorBatchNorm()), torch.jit.script(TensorBatchNorm()), \
+            torch.jit.script(TensorBatchNorm()), torch.jit.script(TensorBatchNorm()),
         else:
-            self.layernorm_i, self.layernorm_h = torch.jit.script(PropNorm()), torch.jit.script(PropNorm())
+            self.layernorm_i, self.layernorm_f, self.layernorm_a, self.layernorm_o = \
+                torch.jit.script(nn.Identity()), torch.jit.script(nn.Identity()), \
+                torch.jit.script(nn.Identity()), torch.jit.script(nn.Identity())
 
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
@@ -264,6 +218,45 @@ class QuantLSTMLayer(nn.Module):
                 compute_output_scale and compute_output_bit_width):
             raise Exception("Quantizing bias requires to compute output scale and output bit width")
 
+
+    def forward_iteration(self, input, state, first,
+                          quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi,
+                          quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh):
+        hx, cx = state
+        zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
+
+        igates_ii = torch.mm(input, quant_weight_ii.t())
+        hgates_ih = torch.mm(hx, quant_weight_ih.t())
+
+        igates_fi = torch.mm(input, quant_weight_fi.t())
+        hgates_fh = torch.mm(hx, quant_weight_fh.t())
+
+        igates_ai = torch.mm(input, quant_weight_ai.t())
+        hgates_ah = torch.mm(hx, quant_weight_ah.t())
+
+        igates_oi = torch.mm(input, quant_weight_oi.t())
+        hgates_oh = torch.mm(hx, quant_weight_oh.t())
+
+        ingate = self.layernorm_i(igates_ii + hgates_ih, first) + self.bias_i
+        forgetgate = self.layernorm_f(igates_fi + hgates_fh, first) + self.bias_f
+        cellgate = self.layernorm_a(igates_ai + hgates_ah, first) + self.bias_a
+        outgate = self.layernorm_o(igates_oi + hgates_oh, first) + self.bias_o
+
+        ingate, _, _ = self.quant_sigmoid(ingate, zero_hw_sentinel)
+        forgetgate, _, _ = self.quant_sigmoid(forgetgate, zero_hw_sentinel)
+        cellgate, _, _ = self.quant_tanh(cellgate, zero_hw_sentinel)
+        outgate, _, _ = self.quant_sigmoid(outgate, zero_hw_sentinel)
+
+        cy = (forgetgate * cx) + (ingate * cellgate)
+        hy = outgate * self.quant_tanh(cy, zero_hw_sentinel)[0]
+        hy1, _, _ = self.out_quant(hy, zero_hw_sentinel)
+        hy2, _, _ = self.rec_quant(hy, zero_hw_sentinel)
+
+        return hy1, (hy2, cy)
+
+
+
+
     def forward(self, inputs, state):
         # type: (Tensor, Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]
 
@@ -288,53 +281,27 @@ class QuantLSTMLayer(nn.Module):
                                                                                                 zero_hw_sentinel)
         quant_weight_oh, quant_weight_oh_scale, quant_weight_oh_bit_width = self.weight_proxy_o(self.weight_oh,
                                                                                                 zero_hw_sentinel)
-        zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
 
         inputs = inputs.unbind(0)
 
-        start = 0
+        start = 1
         end = len(inputs)
         step = 1
         if self.reverse_input:
-            start = end - 1
+            start = end - 2
             end = -1
             step = -1
             # inputs = reverse(inputs)
         outputs = torch.jit.annotate(List[Tensor], [])
+        output, state = self.forward_iteration(inputs[0], state, True,
+              quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi,
+              quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh)
+        outputs += [output]
         for i in range(start, end, step):
-            first = False
-            if i == start:
-                first = True
-            hx, cx = state
-
-            igates_ii = torch.mm(inputs[i], quant_weight_ii.t())
-            hgates_ih = torch.mm(hx, quant_weight_ih.t())
-
-            igates_fi = torch.mm(inputs[i], quant_weight_fi.t())
-            hgates_fh = torch.mm(hx, quant_weight_fh.t())
-
-            igates_ai = torch.mm(inputs[i], quant_weight_ai.t())
-            hgates_ah = torch.mm(hx, quant_weight_ah.t())
-
-            igates_oi = torch.mm(inputs[i], quant_weight_oi.t())
-            hgates_oh = torch.mm(hx, quant_weight_oh.t())
-
-            ingate = self.layernorm_i(igates_ii + hgates_ih, first) + self.bias_i
-            forgetgate = self.layernorm_f(igates_fi + hgates_fh, first) + self.bias_f
-            cellgate = self.layernorm_a(igates_ai + hgates_ah, first) + self.bias_a
-            outgate = self.layernorm_o(igates_oi + hgates_oh, first) + self.bias_o
-
-            ingate, _, _ = self.quant_sigmoid(ingate, zero_hw_sentinel)
-            forgetgate, _, _ = self.quant_sigmoid(forgetgate, zero_hw_sentinel)
-            cellgate, _, _ = self.quant_tanh(cellgate, zero_hw_sentinel)
-            outgate, _, _ = self.quant_sigmoid(outgate, zero_hw_sentinel)
-
-            cy = (forgetgate * cx) + (ingate * cellgate)
-            hy = outgate * self.quant_tanh(cy, zero_hw_sentinel)[0]
-            hy1, _, _ = self.out_quant(hy, zero_hw_sentinel)
-            hy2, _, _ = self.rec_quant(hy, zero_hw_sentinel)
-            outputs += [hy1]
-            state = (hy2, cy)
+            output, state = self.forward_iteration(inputs[i], state, False,
+                          quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi,
+                          quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh)
+            outputs += [output]
 
         if self.reverse_input:
             return torch.stack(reverse(outputs)), state
