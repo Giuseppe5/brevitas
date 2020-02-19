@@ -114,6 +114,7 @@ class _IncompatibleKeys(namedtuple('IncompatibleKeys', ['missing_keys', 'unexpec
 
     __str__ = __repr__
 
+
 def reverse(lst):
     # type: (List[Tensor]) -> List[Tensor]
     out = torch.jit.annotate(List[Tensor], [])
@@ -123,6 +124,7 @@ def reverse(lst):
     for i in range(start, end, step):
         out += [lst[i]]
     return out
+
 
 class TensorBatchNorm(nn.Module):
     def __init__(self, eps=1e-5, momentum=0.1):
@@ -135,21 +137,28 @@ class TensorBatchNorm(nn.Module):
         self.running_mean.zero_()
         self.running_var.fill_(1)
 
-    def forward(self, input: torch.Tensor, first: bool):
-        if self.training and not first:
+    def forward(self, input: torch.Tensor):
+        if self.training:
             mean = input.mean()
             unbias_var = input.var(unbiased=True)
             self.running_mean = (1-self.momentum) * self.running_mean + mean.detach() * self.momentum
             self.running_var = (1-self.momentum) * self.running_var + unbias_var.detach() * self.momentum
             biased_var = input.var(unbiased=False)
-            inv_std = 1/(biased_var + self.eps).pow(0.5)
-            output = (input-mean) * inv_std * self.weight
+            output = functional_tensor_batch_norm(input, mean, biased_var, self.eps, self.weight)
+            # inv_std = 1/(biased_var + self.eps).pow(0.5)
+            # output = (input-mean) * inv_std * self.weight
             return output
         else:
-            return (input-self.running_mean) * (1/(self.running_var+self.eps).pow(0.5)) * self.weight
+            output = functional_tensor_batch_norm(input, self.running_mean, self.running_var, self.eps, self.weight)
+            return output
+
+def functional_tensor_batch_norm(input, mean, var, eps, weight):
+    inv_std = 1/(var + eps).pow(0.5)
+    output = (input-mean)*inv_std*weight
+    return output
 
 class QuantLSTMLayer(nn.Module):
-    def __init__(self, input_size, hidden_size, weight_config, activation_config, batch=None,
+    def __init__(self, input_size, hidden_size, weight_config, activation_config,
                  reverse_input=False, layer_norm='identity', compute_output_scale=False,
                  compute_output_bit_width=False, return_quant_tensor=False,
                  recurrent_quant=None, output_quant=None):
@@ -218,8 +227,7 @@ class QuantLSTMLayer(nn.Module):
                 compute_output_scale and compute_output_bit_width):
             raise Exception("Quantizing bias requires to compute output scale and output bit width")
 
-
-    def forward_iteration(self, input, state, first,
+    def forward_iteration(self, input, state,
                           quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi,
                           quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh):
         hx, cx = state
@@ -237,10 +245,10 @@ class QuantLSTMLayer(nn.Module):
         igates_oi = torch.mm(input, quant_weight_oi.t())
         hgates_oh = torch.mm(hx, quant_weight_oh.t())
 
-        ingate = self.layernorm_i(igates_ii + hgates_ih, first) + self.bias_i
-        forgetgate = self.layernorm_f(igates_fi + hgates_fh, first) + self.bias_f
-        cellgate = self.layernorm_a(igates_ai + hgates_ah, first) + self.bias_a
-        outgate = self.layernorm_o(igates_oi + hgates_oh, first) + self.bias_o
+        ingate = self.layernorm_i(igates_ii + hgates_ih) + self.bias_i
+        forgetgate = self.layernorm_f(igates_fi + hgates_fh) + self.bias_f
+        cellgate = self.layernorm_a(igates_ai + hgates_ah) + self.bias_a
+        outgate = self.layernorm_o(igates_oi + hgates_oh) + self.bias_o
 
         ingate, _, _ = self.quant_sigmoid(ingate, zero_hw_sentinel)
         forgetgate, _, _ = self.quant_sigmoid(forgetgate, zero_hw_sentinel)
@@ -254,8 +262,52 @@ class QuantLSTMLayer(nn.Module):
 
         return hy1, (hy2, cy)
 
+    def forward_first(self, input, state,
+                          quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi,
+                          quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh):
+        hx, cx = state
+        zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
 
+        igates_ii = torch.mm(input, quant_weight_ii.t())
+        hgates_ih = torch.mm(hx, quant_weight_ih.t())
 
+        igates_fi = torch.mm(input, quant_weight_fi.t())
+        hgates_fh = torch.mm(hx, quant_weight_fh.t())
+
+        igates_ai = torch.mm(input, quant_weight_ai.t())
+        hgates_ah = torch.mm(hx, quant_weight_ah.t())
+
+        igates_oi = torch.mm(input, quant_weight_oi.t())
+        hgates_oh = torch.mm(hx, quant_weight_oh.t())
+
+        ingate = functional_tensor_batch_norm(igates_ii + hgates_ih, self.layernorm_i.running_mean,
+                                              self.layernorm_i.running_var, self.layernorm_i.eps,
+                                              self.layernorm_i.weight) + self.bias_i
+        forgetgate = functional_tensor_batch_norm(igates_ii + hgates_ih, self.layernorm_f.running_mean,
+                                              self.layernorm_f.running_var, self.layernorm_f.eps,
+                                              self.layernorm_f.weight) + self.bias_f
+        cellgate = functional_tensor_batch_norm(igates_ii + hgates_ih, self.layernorm_a.running_mean,
+                                              self.layernorm_a.running_var, self.layernorm_a.eps,
+                                              self.layernorm_a.weight) + self.bias_a
+        outgate = functional_tensor_batch_norm(igates_ii + hgates_ih, self.layernorm_o.running_mean,
+                                              self.layernorm_o.running_var, self.layernorm_o.eps,
+                                              self.layernorm_o.weight) + self.bias_o
+        # ingate = self.layernorm_i(igates_ii + hgates_ih, first) + self.bias_i
+        # forgetgate = self.layernorm_f(igates_fi + hgates_fh, first) + self.bias_f
+        # cellgate = self.layernorm_a(igates_ai + hgates_ah, first) + self.bias_a
+        # outgate = self.layernorm_o(igates_oi + hgates_oh, first) + self.bias_o
+
+        ingate, _, _ = self.quant_sigmoid(ingate, zero_hw_sentinel)
+        forgetgate, _, _ = self.quant_sigmoid(forgetgate, zero_hw_sentinel)
+        cellgate, _, _ = self.quant_tanh(cellgate, zero_hw_sentinel)
+        outgate, _, _ = self.quant_sigmoid(outgate, zero_hw_sentinel)
+
+        cy = (forgetgate * cx) + (ingate * cellgate)
+        hy = outgate * self.quant_tanh(cy, zero_hw_sentinel)[0]
+        hy1, _, _ = self.out_quant(hy, zero_hw_sentinel)
+        hy2, _, _ = self.rec_quant(hy, zero_hw_sentinel)
+
+        return hy1, (hy2, cy)
 
     def forward(self, inputs, state):
         # type: (Tensor, Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]
@@ -293,12 +345,12 @@ class QuantLSTMLayer(nn.Module):
             step = -1
             # inputs = reverse(inputs)
         outputs = torch.jit.annotate(List[Tensor], [])
-        output, state = self.forward_iteration(inputs[0], state, True,
+        output, state = self.forward_iteration(inputs[0], state
               quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi,
               quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh)
         outputs += [output]
         for i in range(start, end, step):
-            output, state = self.forward_iteration(inputs[i], state, False,
+            output, state = self.forward_iteration(inputs[i], state
                           quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi,
                           quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh)
             outputs += [output]
