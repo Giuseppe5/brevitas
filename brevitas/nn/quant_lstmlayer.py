@@ -152,11 +152,11 @@ class TensorBatchNorm(nn.Module):
             output = functional_tensor_batch_norm(input, self.running_mean, self.running_var, self.eps, self.weight)
             return output
 
-def functional_tensor_batch_norm(input, mean, var, eps, weight):
+def functional_tensor_batch_norm(input: torch.Tensor, mean: torch.Tensor, var: torch.Tensor, eps: float, weight: torch.Tensor):
     inv_std = 1/(var + eps).pow(0.5)
     output = (input-mean)*inv_std*weight
     return output
-
+import time
 class QuantLSTMLayer(nn.Module):
     def __init__(self, input_size, hidden_size, weight_config, activation_config,
                  reverse_input=False, layer_norm='identity', compute_output_scale=False,
@@ -345,12 +345,12 @@ class QuantLSTMLayer(nn.Module):
             step = -1
             # inputs = reverse(inputs)
         outputs = torch.jit.annotate(List[Tensor], [])
-        output, state = self.forward_iteration(inputs[0], state
+        output, state = self.forward_first(inputs[0], state,
               quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi,
               quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh)
         outputs += [output]
         for i in range(start, end, step):
-            output, state = self.forward_iteration(inputs[i], state
+            output, state = self.forward_iteration(inputs[i], state,
                           quant_weight_ii, quant_weight_fi, quant_weight_ai, quant_weight_oi,
                           quant_weight_ih, quant_weight_fh, quant_weight_ah, quant_weight_oh)
             outputs += [output]
