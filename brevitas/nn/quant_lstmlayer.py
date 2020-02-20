@@ -283,13 +283,13 @@ class QuantLSTMLayer(nn.Module):
         ingate = functional_tensor_batch_norm(igates_ii + hgates_ih, self.layernorm_i.running_mean,
                                               self.layernorm_i.running_var, self.layernorm_i.eps,
                                               self.layernorm_i.weight) + self.bias_i
-        forgetgate = functional_tensor_batch_norm(igates_ii + hgates_ih, self.layernorm_f.running_mean,
+        forgetgate = functional_tensor_batch_norm(igates_fi + hgates_fh, self.layernorm_f.running_mean,
                                               self.layernorm_f.running_var, self.layernorm_f.eps,
                                               self.layernorm_f.weight) + self.bias_f
-        cellgate = functional_tensor_batch_norm(igates_ii + hgates_ih, self.layernorm_a.running_mean,
+        cellgate = functional_tensor_batch_norm(igates_ai + hgates_ah, self.layernorm_a.running_mean,
                                               self.layernorm_a.running_var, self.layernorm_a.eps,
                                               self.layernorm_a.weight) + self.bias_a
-        outgate = functional_tensor_batch_norm(igates_ii + hgates_ih, self.layernorm_o.running_mean,
+        outgate = functional_tensor_batch_norm(igates_oi + hgates_oh, self.layernorm_o.running_mean,
                                               self.layernorm_o.running_var, self.layernorm_o.eps,
                                               self.layernorm_o.weight) + self.bias_o
         # ingate = self.layernorm_i(igates_ii + hgates_ih, first) + self.bias_i
