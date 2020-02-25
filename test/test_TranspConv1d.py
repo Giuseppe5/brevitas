@@ -1,5 +1,5 @@
 import torch
-import brevitas.nn.quant_ConvTranspose1d as quant_ConvTranspose1d
+import brevitas.nn.quant_convtranspose1d as quant_convtranspose1d
 import test.generate_quant_input as input_gen
 from brevitas.core.quant import QuantType
 import random
@@ -33,7 +33,7 @@ class Test1DTranspConv:
     def test_float_quant(self):
         shape = (BATCH, IN_CHANNEL, HEIGHT)
         input_quant_int, input_quant = input_gen.generate_quant_input(shape, BIT, SCALE, True, True)
-        ConvTranspose1d = quant_ConvTranspose1d.QuantConvTranspose1d(in_channels=IN_CHANNEL,
+        ConvTranspose1d = quant_convtranspose1d.QuantConvTranspose1d(in_channels=IN_CHANNEL,
                                           out_channels=OUT_CHANNEL,
                                           kernel_size=KERNEL,
                                           stride=STRIDE,
@@ -54,7 +54,7 @@ class Test1DTranspConv:
     def test_int(self):
         shape = (BATCH, IN_CHANNEL, HEIGHT)
         input_quant_int, input_quant = input_gen.generate_quant_input(shape, BIT, SCALE, True, True)
-        ConvTranspose1d = quant_ConvTranspose1d.QuantConvTranspose1d(in_channels=IN_CHANNEL,
+        ConvTranspose1d = quant_convtranspose1d.QuantConvTranspose1d(in_channels=IN_CHANNEL,
                                           out_channels=OUT_CHANNEL,
                                           kernel_size=KERNEL,
                                           stride=STRIDE,
@@ -74,7 +74,7 @@ class Test1DTranspConv:
     # def test_int_scale_layer(self):
     #     shape = (BATCH, IN_CHANNEL, HEIGHT)
     #     input_quant_int, input_quant = input_gen.generate_quant_input(shape, BIT, SCALE, True, True)
-    #     ConvTranspose1d = quant_ConvTranspose1d.QuantConvTranspose1d(in_channels=IN_CHANNEL,
+    #     ConvTranspose1d = quant_convtranspose1d.QuantConvTranspose1d(in_channels=IN_CHANNEL,
     #                                       out_channels=OUT_CHANNEL,
     #                                       kernel_size=KERNEL,
     #                                       stride=STRIDE,
