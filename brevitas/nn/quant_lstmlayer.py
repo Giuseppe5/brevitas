@@ -179,9 +179,9 @@ class QuantLSTMLayer(nn.Module):
         self.weight_ah = nn.Parameter(torch.randn(hidden_size, hidden_size), requires_grad=True)
         self.weight_oh = nn.Parameter(torch.randn(hidden_size, hidden_size), requires_grad=True)
 
-        self.bias_i = nn.Parameter(torch.rand(hidden_size), requires_grad=True)
-        self.bias_f = nn.Parameter(torch.rand(hidden_size), requires_grad=True)
-        self.bias_a = nn.Parameter(torch.rand(hidden_size), requires_grad=True)
+        self.bias_i = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
+        self.bias_f = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
+        self.bias_a = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
         self.bias_o = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
         self.reverse_input = reverse_input
 
