@@ -167,21 +167,17 @@ class QuantGRULayer(torch.jit.ScriptModule):
 
     @torch.jit.script_method
     def forward_iteration(self, input, state,
-                          quant_weight_ri, quant_weight_ci, quant_weight_ni,
-                          quant_weight_rh, quant_weight_ch, quant_weight_nh):
+                          quant_weight_ih, quant_weight_hh, quant_weight_ni, quant_weight_nh):
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
 
-        gates_ri = torch.mm(input, quant_weight_ri.t())
-        gates_rh = torch.mm(state, quant_weight_rh.t())
-
-        gates_ci = torch.mm(input, quant_weight_ci.t())
-        gates_ch = torch.mm(state, quant_weight_ch.t())
+        gates = (torch.mm(input, quant_weight_ih.t()) + torch.mm(state, quant_weight_hh.t()))
+        rgate, cgate = gates.chunk(2, 1)
 
         gates_ni = torch.mm(input, quant_weight_ni.t()) + self.bias_ni
         gates_nh = torch.mm(state, quant_weight_nh.t()) + self.bias_nh
 
-        rgate = (gates_ri + gates_rh) + self.bias_r
-        cgate = (gates_ci + gates_ch) + self.bias_i
+        rgate = rgate + self.bias_r
+        cgate = cgate + self.bias_i
 
         rgate = self.quant_sigmoid(rgate, zero_hw_sentinel)[0]
         cgate = self.quant_sigmoid(cgate, zero_hw_sentinel)[0]
@@ -215,6 +211,8 @@ class QuantGRULayer(torch.jit.ScriptModule):
         quant_weight_nh, quant_weight_nh_scale, quant_weight_nh_bit_width = self.weight_proxy_n(self.weight_nh,
                                                                                                 zero_hw_sentinel)
 
+        quant_weight_ih = torch.cat([quant_weight_ri, quant_weight_ci])
+        quant_weight_hh = torch.cat([quant_weight_rh, quant_weight_ch])
         inputs = inputs.unbind(0)
 
         start = 0
@@ -230,8 +228,7 @@ class QuantGRULayer(torch.jit.ScriptModule):
         for i in range(start, end, step):
             input_quant = self.norm_scale_out(inputs[i], zero_hw_sentinel)[0]
             output, state = self.forward_iteration(input_quant, state,
-                                                   quant_weight_ri, quant_weight_ci, quant_weight_ni,
-                                                   quant_weight_rh, quant_weight_ch, quant_weight_nh)
+                                                   quant_weight_ih, quant_weight_hh, quant_weight_ni, quant_weight_nh)
             outputs += [state]
 
         if self.reverse_input:
@@ -242,7 +239,6 @@ class QuantGRULayer(torch.jit.ScriptModule):
     def max_output_bit_width(self, input_bit_width, weight_bit_width):
         raise Exception("Not supported yet")
 
-    @torch.jit.script_method
     def unpack_input(self, input):
         if isinstance(input, QuantTensor):
             return input
