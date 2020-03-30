@@ -338,7 +338,7 @@ class QuantGRULayer(torch.jit.ScriptModule):
                                                         scaling_per_channel=False,
                                                         scaling_override=activation_config.get('scaling_override',
                                                                                                None),
-                                                        scaling_impl_type=ScalingImplType.CONST,
+                                                        scaling_impl_type=activation_config.get('scaling_impl_type', ScalingImplType.CONST),
                                                         scaling_stats_sigma=None,
                                                         scaling_stats_op=None,
                                                         scaling_stats_buffer_momentum=None,
