@@ -107,7 +107,7 @@ def reverse(lst):
 
 
 class QuantGRULayer(torch.jit.ScriptModule):
-    __constants__ = ['reverse_input', 'batch_first']
+    __constants__ = ['reverse_input', 'batch_first', 'hidden_size']
 
     def __init__(self, input_size, hidden_size, weight_config, activation_config, norm_scale_out_config,
                  norm_scale_newgate_config, batch_first=False,
@@ -221,16 +221,18 @@ class QuantGRULayer(torch.jit.ScriptModule):
         quant_weight_hh = torch.cat([quant_weight_rh, quant_weight_ch], dim=1)
 
         if self.batch_first:
-            inputs = inputs.unbind(1)
+            dim = 1
+            inputs_unbided = inputs.unbind(1)
         else:
-            inputs = inputs.unbind(0)
-        batch_size = inputs[0].shape[0]
+            dim = 0
+            inputs_unbided = inputs.unbind(0)
+        batch_size = inputs_unbided[0].shape[0]
 
         if state is None:
             state = torch.zeros(batch_size, self.hidden_size)
 
         start = 0
-        end = len(inputs)
+        end = len(inputs_unbided)
         step = 1
         if self.reverse_input:
             start = end - 1
@@ -240,15 +242,15 @@ class QuantGRULayer(torch.jit.ScriptModule):
         outputs = torch.jit.annotate(List[Tensor], [])
         state = self.norm_scale_out(state, zero_hw_sentinel)[0]
         for i in range(start, end, step):
-            input_quant = self.norm_scale_out(inputs[i], zero_hw_sentinel)[0]
+            input_quant = self.norm_scale_out(inputs_unbided[i], zero_hw_sentinel)[0]
             output, state = self.forward_iteration(input_quant, state,
                                                    quant_weight_ih, quant_weight_hh, quant_weight_ni, quant_weight_nh)
             outputs += [state]
 
         if self.reverse_input:
-            return torch.stack(reverse(outputs)), outputs[-1]
+            return torch.stack(reverse(outputs), dim=dim), outputs[-1]
         else:
-            return torch.stack(outputs), outputs[-1]
+            return torch.stack(outputs, dim=dim), outputs[-1]
 
     def max_output_bit_width(self, input_bit_width, weight_bit_width):
         raise Exception("Not supported yet")
@@ -346,7 +348,8 @@ class QuantGRULayer(torch.jit.ScriptModule):
                                                         scaling_per_channel=False,
                                                         scaling_override=activation_config.get('scaling_override',
                                                                                                None),
-                                                        scaling_impl_type=activation_config.get('scaling_impl_type', ScalingImplType.CONST),
+                                                        scaling_impl_type=activation_config.get('scaling_impl_type',
+                                                                                                ScalingImplType.CONST),
                                                         scaling_stats_sigma=None,
                                                         scaling_stats_op=None,
                                                         scaling_stats_buffer_momentum=None,

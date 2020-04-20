@@ -105,3 +105,38 @@ class TestLSTMQuant:
                                 norm_scale_hidden_config=hidden_activation_config,
                                 weight_config=weight_config)
         assert True
+
+    def test_BFQLSTM(self):
+        weight_config = {
+            'weight_quant_type': 'FP'
+        }
+
+        activation_config = {
+            'quant_type': 'FP'
+        }
+        hidden_activation_config = {
+            'quant_type': 'FP',
+            'min_val': -1e32,
+            'max_val': 1e32
+        }
+        input = torch.randn(SEQ, BATCH, INPUT_SIZE)
+        states = LSTMState(torch.zeros(BATCH, HIDDEN),
+                           torch.zeros(BATCH, HIDDEN))
+
+        q_lstm = (QuantLSTMLayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
+                                 norm_scale_out_config=hidden_activation_config,
+                                 norm_scale_hidden_config=hidden_activation_config,
+                                 weight_config=weight_config, batch_first=True))
+        q_lstm.eval()
+
+        # Control
+        lstm = torch.nn.LSTM(INPUT_SIZE, HIDDEN, 1)
+        lstm_state = LSTMState(states.hx.unsqueeze(0), states.cx.unsqueeze(0))
+        q_lstm.load_state_dict(lstm.state_dict())
+        lstm_out, lstm_out_state = lstm(input, lstm_state)
+        out, custom_state = q_lstm(input.transpose(0,1))
+        out = out.transpose(0, 1)
+
+        assert (out - lstm_out).abs().max() < 1e-5
+        assert (custom_state[0] - lstm_out_state[0]).abs().max() < 1e-5
+        assert (custom_state[1] - lstm_out_state[1]).abs().max() < 1e-5

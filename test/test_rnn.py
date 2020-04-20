@@ -91,3 +91,35 @@ class TestRNNQuant:
         q_gru = QuantRNNLayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
                               weight_config=weight_config, norm_scale_input_config=hardtanh_activation_config)
         assert True
+
+    def test_BFQRNN(self):
+        weight_config = {
+            'weight_quant_type': 'FP'
+        }
+
+        activation_config = {
+            'quant_type': 'FP'
+        }
+        hardtanh_activation_config = {
+            'quant_type': 'FP',
+            'min_val': -1e32,
+            'max_val': 1e32
+        }
+
+        input = torch.randn(SEQ, BATCH, INPUT_SIZE)
+        states = torch.randn(BATCH, HIDDEN)
+
+        q_gru = QuantRNNLayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
+                              weight_config=weight_config, norm_scale_input_config=hardtanh_activation_config,
+                              batch_first=True)
+        q_gru.eval()
+
+        # Control
+        gru = torch.nn.RNN(INPUT_SIZE, HIDDEN)
+        q_gru.load_state_dict(gru.state_dict())
+        gru_out, gru_out_state = gru(input, states.unsqueeze(0))
+        out, out_state = q_gru(input.transpose(0,1), states)
+        out = out.transpose(0,1)
+
+        assert torch.allclose(gru_out, out, 1e-05, 1e-05)
+        assert torch.allclose(gru_out_state, out_state, 1e-05, 1e-05)

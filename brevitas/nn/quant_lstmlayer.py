@@ -108,7 +108,7 @@ def reverse(lst):
 
 
 class QuantLSTMLayer(torch.jit.ScriptModule):
-    __constants__ = ['reverse_input', 'batch_first']
+    __constants__ = ['reverse_input', 'batch_first', 'hidden_size']
 
     def __init__(self, input_size, hidden_size, weight_config, activation_config, norm_scale_hidden_config,
                  norm_scale_out_config, reverse_input=False, compute_output_scale=False,
@@ -213,7 +213,6 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
         else:
             inputs, input_scale, input_bit_width = inputs, None, None
 
-
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
 
         quant_weight_ci, quant_weight_ci_scale, quant_weight_ci_bit_width = self.weight_proxy_i(self.weight_ci,
@@ -237,17 +236,19 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
         quant_weight_hh = torch.cat([quant_weight_ch, quant_weight_fh, quant_weight_ah, quant_weight_oh], dim=0)
 
         if self.batch_first:
-            inputs = inputs.unbind(1)
+            dim = 1
+            inputs_unbinded = inputs.unbind(1)
         else:
-            inputs = inputs.unbind(0)
-        batch_size = inputs[0].shape[0]
+            dim = 0
+            inputs_unbinded = inputs.unbind(0)
+        batch_size = inputs_unbinded[0].shape[0]
 
         if state is None:
             state = LSTMState(torch.zeros(batch_size, self.hidden_size),
                               torch.zeros(batch_size, self.hidden_size))
 
         start = 0
-        end = len(inputs)
+        end = len(inputs_unbinded)
         step = 1
         if self.reverse_input:
             start = end - 1
@@ -258,16 +259,16 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
         outputs = torch.jit.annotate(List[Tensor], [])
         hx = self.out_quant(hx, zero_hw_sentinel)[0]
         for i in range(start, end, step):
-            input_quant = self.out_quant(inputs[i], zero_hw_sentinel)[0]
+            input_quant = self.out_quant(inputs_unbinded[i], zero_hw_sentinel)[0]
             output, state = self.forward_iteration(input_quant, hx, cx, quant_weight_ih, quant_weight_hh)
 
             hx, cx = state
             outputs += [output]
 
         if self.reverse_input:
-            return torch.stack(reverse(outputs)), state
+            return torch.stack(reverse(outputs), dim=dim), state
         else:
-            return torch.stack(outputs), state
+            return torch.stack(outputs, dim=dim), state
 
     def max_output_bit_width(self, input_bit_width, weight_bit_width):
         raise Exception("Not supported yet")

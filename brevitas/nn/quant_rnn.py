@@ -107,7 +107,7 @@ def reverse(lst):
 
 
 class QuantRNNLayer(torch.jit.ScriptModule):
-    __constants__ = ['reverse_input', 'batch_first']
+    __constants__ = ['reverse_input', 'batch_first', 'hidden_size']
 
     def __init__(self, input_size, hidden_size, weight_config, activation_config, norm_scale_input_config,
                  reverse_input=False, compute_output_scale=False, batch_first=False,
@@ -178,16 +178,18 @@ class QuantRNNLayer(torch.jit.ScriptModule):
         quant_weight_rh, quant_weight_rh_scale, quant_weight_rh_bit_width = self.weight_proxy(self.weight_rh,
                                                                                               zero_hw_sentinel)
         if self.batch_first:
-            inputs = inputs.unbind(1)
+            dim = 1
+            inputs_unbinded = inputs.unbind(1)
         else:
-            inputs = inputs.unbind(0)
-        batch_size = inputs[0].shape[0]
+            dim = 0
+            inputs_unbinded = inputs.unbind(0)
+        batch_size = inputs_unbinded[0].shape[0]
 
         if state is None:
             state = torch.zeros(batch_size, self.hidden_size)
 
         start = 0
-        end = len(inputs)
+        end = len(inputs_unbinded)
         step = 1
         if self.reverse_input:
             start = end - 1
@@ -197,18 +199,17 @@ class QuantRNNLayer(torch.jit.ScriptModule):
         outputs = torch.jit.annotate(List[Tensor], [])
         state = self.quant_input(state, zero_hw_sentinel)[0]
         for i in range(start, end, step):
-            input_quant = self.quant_input(inputs[i], zero_hw_sentinel)[0]
+            input_quant = self.quant_input(inputs_unbinded[i], zero_hw_sentinel)[0]
             output, state = self.forward_iteration(input_quant, state, quant_weight_ri, quant_weight_rh)
             outputs += [state]
 
         if self.reverse_input:
-            return torch.stack(reverse(outputs)), outputs[-1]
+            return torch.stack(reverse(outputs), dim=dim), outputs[-1]
         else:
-            return torch.stack(outputs), outputs[-1]
+            return torch.stack(outputs, dim=dim), outputs[-1]
 
     def max_output_bit_width(self, input_bit_width, weight_bit_width):
         raise Exception("Not supported yet")
-
 
     def configure_weight(self, weight, weight_config):
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
