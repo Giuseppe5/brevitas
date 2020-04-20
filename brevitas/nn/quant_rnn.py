@@ -84,7 +84,7 @@ from brevitas.core.function_wrapper import ConstScalarClamp
 from brevitas.nn.quant_layer import SCALING_MIN_VAL
 import torch
 
-from typing import Tuple, List
+from typing import Optional, Tuple, List
 from torch import Tensor
 from brevitas.core import ZERO_HW_SENTINEL_NAME, ZERO_HW_SENTINEL_VALUE
 from collections import OrderedDict
@@ -107,10 +107,10 @@ def reverse(lst):
 
 
 class QuantRNNLayer(torch.jit.ScriptModule):
-    __constants__ = ['reverse_input']
+    __constants__ = ['reverse_input', 'batch_first']
 
     def __init__(self, input_size, hidden_size, weight_config, activation_config, norm_scale_input_config,
-                 reverse_input=False, compute_output_scale=False,
+                 reverse_input=False, compute_output_scale=False, batch_first=False,
                  compute_output_bit_width=False, return_quant_tensor=False):
 
         super(QuantRNNLayer, self).__init__()
@@ -128,6 +128,8 @@ class QuantRNNLayer(torch.jit.ScriptModule):
         self.bias_r = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
 
         self.reverse_input = reverse_input
+        self.hidden_size = hidden_size
+        self.batch_first = batch_first
 
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
@@ -160,18 +162,29 @@ class QuantRNNLayer(torch.jit.ScriptModule):
         return hy, hy
 
     @torch.jit.script_method
-    def forward(self, inputs, state):
-        # type: (Tensor, Tensor) -> Tuple[Tensor, Tensor]
+    def forward(self, inputs, state=None):
+        # type: (Tensor, Optional[Tensor]) -> Tuple[Tensor, Tensor]
 
-        inputs, input_scale, input_bit_width = self.unpack_input(inputs)
+        # Inline unpack input
+        if isinstance(inputs, QuantTensor):
+            inputs = inputs
+        else:
+            inputs, input_scale, input_bit_width = inputs, None, None
+
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
 
         quant_weight_ri, quant_weight_ri_scale, quant_weight_ri_bit_width = self.weight_proxy(self.weight_ri,
                                                                                               zero_hw_sentinel)
         quant_weight_rh, quant_weight_rh_scale, quant_weight_rh_bit_width = self.weight_proxy(self.weight_rh,
                                                                                               zero_hw_sentinel)
+        if self.batch_first:
+            inputs = inputs.unbind(1)
+        else:
+            inputs = inputs.unbind(0)
+        batch_size = inputs[0].shape[0]
 
-        inputs = inputs.unbind(0)
+        if state is None:
+            state = torch.zeros(batch_size, self.hidden_size)
 
         start = 0
         end = len(inputs)
@@ -196,12 +209,6 @@ class QuantRNNLayer(torch.jit.ScriptModule):
     def max_output_bit_width(self, input_bit_width, weight_bit_width):
         raise Exception("Not supported yet")
 
-    @torch.jit.script_method
-    def unpack_input(self, input):
-        if isinstance(input, QuantTensor):
-            return input
-        else:
-            return input, None, None
 
     def configure_weight(self, weight, weight_config):
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')

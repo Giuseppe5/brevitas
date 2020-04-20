@@ -107,10 +107,10 @@ def reverse(lst):
 
 
 class QuantGRULayer(torch.jit.ScriptModule):
-    __constants__ = ['reverse_input']
+    __constants__ = ['reverse_input', 'batch_first']
 
     def __init__(self, input_size, hidden_size, weight_config, activation_config, norm_scale_out_config,
-                 norm_scale_newgate_config,
+                 norm_scale_newgate_config, batch_first=False,
                  reverse_input=False, compute_output_scale=False,
                  compute_output_bit_width=False, return_quant_tensor=False):
 
@@ -142,6 +142,8 @@ class QuantGRULayer(torch.jit.ScriptModule):
         self.bias_nh = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
 
         self.reverse_input = reverse_input
+        self.batch_first = batch_first
+        self.hidden_size = hidden_size
 
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
@@ -191,11 +193,15 @@ class QuantGRULayer(torch.jit.ScriptModule):
         return hy, hy
 
     @torch.jit.script_method
-    def forward(self, inputs, state):
-        # type: (Tensor, Tensor) -> Tuple[Tensor, Tensor]
+    def forward(self, inputs, state=None):
+        # type: (Tensor, Optional[Tensor]) -> Tuple[Tensor, Tensor]
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
 
-        inputs, input_scale, input_bit_width = self.unpack_input(inputs)
+        # Inline unpack input
+        if isinstance(inputs, QuantTensor):
+            inputs = inputs
+        else:
+            inputs, input_scale, input_bit_width = inputs, None, None
 
         quant_weight_ri, quant_weight_ri_scale, quant_weight_ri_bit_width = self.weight_proxy_r(self.weight_ri,
                                                                                                 zero_hw_sentinel)
@@ -213,7 +219,15 @@ class QuantGRULayer(torch.jit.ScriptModule):
 
         quant_weight_ih = torch.cat([quant_weight_ri, quant_weight_ci], dim=1)
         quant_weight_hh = torch.cat([quant_weight_rh, quant_weight_ch], dim=1)
-        inputs = inputs.unbind(0)
+
+        if self.batch_first:
+            inputs = inputs.unbind(1)
+        else:
+            inputs = inputs.unbind(0)
+        batch_size = inputs[0].shape[0]
+
+        if state is None:
+            state = torch.zeros(batch_size, self.hidden_size)
 
         start = 0
         end = len(inputs)
@@ -238,12 +252,6 @@ class QuantGRULayer(torch.jit.ScriptModule):
 
     def max_output_bit_width(self, input_bit_width, weight_bit_width):
         raise Exception("Not supported yet")
-
-    def unpack_input(self, input):
-        if isinstance(input, QuantTensor):
-            return input
-        else:
-            return input, None, None
 
     def configure_weight(self, weight, weight_config):
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
@@ -373,7 +381,7 @@ class QuantGRULayer(torch.jit.ScriptModule):
 
     def fix_state_dict(self, prefix, state_dict):
         newstate = OrderedDict()
-        hidden = self.weight_ch.shape[0]
+        hidden = self.hidden_size
         bias_r = torch.zeros(hidden)
         bias_i = torch.zeros(hidden)
         prefix_len = len(prefix)

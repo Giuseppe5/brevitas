@@ -30,10 +30,10 @@ class TestLSTMQuant:
         input = torch.randn(SEQ, BATCH, INPUT_SIZE)
         states = torch.randn(BATCH, HIDDEN)
 
-        q_gru =QuantGRULayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
-                                               weight_config=weight_config,
-                                               norm_scale_out_config=hardtanh_activation_config,
-                                               norm_scale_newgate_config=hardtanh_activation_config)
+        q_gru = QuantGRULayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
+                              weight_config=weight_config,
+                              norm_scale_out_config=hardtanh_activation_config,
+                              norm_scale_newgate_config=hardtanh_activation_config)
         q_gru.eval()
 
         # Control
@@ -67,9 +67,9 @@ class TestLSTMQuant:
         states_fp = torch.randn(2, BATCH, HIDDEN)
 
         q_gru = BidirGRULayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
-                                               weight_config=weight_config,
-                                               norm_scale_out_config=hardtanh_activation_config,
-                                               norm_scale_newgate_config=hardtanh_activation_config)
+                              weight_config=weight_config,
+                              norm_scale_out_config=hardtanh_activation_config,
+                              norm_scale_newgate_config=hardtanh_activation_config)
         q_gru.eval()
 
         # Control
@@ -84,3 +84,23 @@ class TestLSTMQuant:
         assert torch.allclose(gru_out_state[0], out_state[0], 1e-05, 1e-05)
         assert torch.allclose(gru_out_state[1], out_state[1], 1e-05, 1e-05)
         print("DONE")
+
+    def test_QGRU(self):
+        weight_config = {
+            'weight_quant_type': 'INT'
+        }
+
+        activation_config = {
+            'quant_type': 'INT'
+        }
+        hardtanh_activation_config = {
+            'quant_type': 'INT',
+            'min_val': -1e32,
+            'max_val': 1e32
+        }
+
+        q_gru = QuantGRULayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
+                              weight_config=weight_config,
+                              norm_scale_out_config=hardtanh_activation_config,
+                              norm_scale_newgate_config=hardtanh_activation_config)
+        assert True
