@@ -147,6 +147,14 @@ class QuantRNNLayer(torch.jit.ScriptModule):
                 compute_output_scale and compute_output_bit_width):
             raise Exception("Quantizing bias requires to compute output scale and output bit width")
 
+    def init_weights(self):
+        # Xavier uniform for gates
+        torch.nn.init.xavier_uniform_(self.weight_ri)
+        torch.nn.init.xavier_uniform_(self.weight_rh)
+
+        # Zeros for bias, Ones for bias of forget gate
+        torch.nn.init.zeros_(self.bias_r)
+
     @torch.jit.script_method
     def forward_iteration(self, input, state, quant_weight_ri, quant_weight_rh):
 
@@ -268,12 +276,7 @@ class QuantRNNLayer(torch.jit.ScriptModule):
             min_val = 0
             signed = False
         else:
-            min_val = activation_config.get('min_val')
-            max_val = activation_config.get('max_val')
-            if activation_config.get('quant_type') == QuantType.FP:
-                activation_impl = ConstScalarClamp(min_val=min_val, max_val=max_val)
-            else:
-                activation_impl = nn.Identity()
+            activation_impl = nn.Identity()
 
         activation_object = _activation_quant_init_impl(activation_impl=activation_impl,
                                                         bit_width=activation_config.get('bit_width', 8),

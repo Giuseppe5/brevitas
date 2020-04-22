@@ -136,10 +136,12 @@ class QuantGRULayer(torch.jit.ScriptModule):
         self.weight_ch = weight_ch
         self.weight_nh = weight_nh
 
-        self.bias_r = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
-        self.bias_i = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
-        self.bias_ni = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
-        self.bias_nh = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
+        self.bias_r = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
+        self.bias_i = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
+        self.bias_ni = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
+        self.bias_nh = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
+
+        self.init_weights()
 
         self.reverse_input = reverse_input
         self.batch_first = batch_first
@@ -166,6 +168,22 @@ class QuantGRULayer(torch.jit.ScriptModule):
         if self.weight_config.get('bias_quant_type', 'QuantType.FP') != 'QuantType.FP' and not (
                 compute_output_scale and compute_output_bit_width):
             raise Exception("Quantizing bias requires to compute output scale and output bit width")
+
+    def init_weights(self):
+        # Xavier uniform for gates
+        torch.nn.init.xavier_uniform_(self.weight_ri)
+        torch.nn.init.xavier_uniform_(self.weight_ci)
+        torch.nn.init.xavier_uniform_(self.weight_ni)
+
+        torch.nn.init.xavier_uniform_(self.weight_rh)
+        torch.nn.init.xavier_uniform_(self.weight_ch)
+        torch.nn.init.xavier_uniform_(self.weight_nh)
+
+        # Zeros for bias
+        torch.nn.init.zeros_(self.bias_r)
+        torch.nn.init.zeros_(self.bias_i)
+        torch.nn.init.zeros_(self.bias_ni)
+        torch.nn.init.zeros_(self.bias_nh)
 
     @torch.jit.script_method
     def forward_iteration(self, input, state,
@@ -312,12 +330,7 @@ class QuantGRULayer(torch.jit.ScriptModule):
             min_val = 0
             signed = False
         else:
-            min_val = activation_config.get('min_val')
-            max_val = activation_config.get('max_val')
-            if activation_config.get('quant_type') == QuantType.FP:
-                activation_impl = ConstScalarClamp(min_val=min_val, max_val=max_val)
-            else:
-                activation_impl = nn.Identity()
+            activation_impl = nn.Identity()
 
         activation_object = _activation_quant_init_impl(activation_impl=activation_impl,
                                                         bit_width=activation_config.get('bit_width', 8),

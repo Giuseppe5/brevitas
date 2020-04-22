@@ -145,6 +145,9 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
         self.bias_f = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
         self.bias_a = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
         self.bias_o = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
+
+        self.init_weights()
+
         self.reverse_input = reverse_input
         self.batch_first = batch_first
         self.hidden_size = hidden_size
@@ -174,6 +177,24 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
         if self.weight_config.get('bias_quant_type', 'QuantType.FP') != 'QuantType.FP' and not (
                 compute_output_scale and compute_output_bit_width):
             raise Exception("Quantizing bias requires to compute output scale and output bit width")
+
+    def init_weights(self):
+        # Xavier uniform for gates
+        torch.nn.init.xavier_uniform_(self.weight_ci)
+        torch.nn.init.xavier_uniform_(self.weight_fi)
+        torch.nn.init.xavier_uniform_(self.weight_ai)
+        torch.nn.init.xavier_uniform_(self.weight_oh)
+
+        torch.nn.init.xavier_uniform_(self.weight_ch)
+        torch.nn.init.xavier_uniform_(self.weight_fh)
+        torch.nn.init.xavier_uniform_(self.weight_ah)
+        torch.nn.init.xavier_uniform_(self.weight_nh)
+
+        # Zeros for bias, Ones for bias of forget gate
+        torch.nn.init.zeros_(self.bias_i)
+        torch.nn.init.ones_(self.bias_f)
+        torch.nn.init.zeros_(self.bias_a)
+        torch.nn.init.zeros_(self.bias_o)
 
     @torch.jit.script_method
     def forward_iteration(self, input, hx, cx,
@@ -330,12 +351,7 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
             min_val = 0
             signed = False
         else:
-            min_val = activation_config.get('min_val')
-            max_val = activation_config.get('max_val')
-            if activation_config.get('quant_type') == 'FP':
-                activation_impl = ConstScalarClamp(min_val=min_val, max_val=max_val)
-            else:
-                activation_impl = nn.Identity()
+            activation_impl = nn.Identity()
 
         activation_object = _activation_quant_init_impl(activation_impl=activation_impl,
                                                         bit_width=activation_config.get('bit_width', 8),
