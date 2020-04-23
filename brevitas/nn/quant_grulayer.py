@@ -111,7 +111,7 @@ class QuantGRULayer(torch.jit.ScriptModule):
     __constants__ = ['reverse_input', 'batch_first', 'hidden_size']
 
     def __init__(self, input_size, hidden_size, weight_config, activation_config, norm_scale_out_config,
-                 norm_scale_newgate_config, batch_first=False,
+                 norm_scale_hidden_config, batch_first=False,
                  reverse_input=False, compute_output_scale=False,
                  compute_output_bit_width=False, return_quant_tensor=False):
 
@@ -142,11 +142,11 @@ class QuantGRULayer(torch.jit.ScriptModule):
         self.bias_ni = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
         self.bias_nh = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
 
-        self.init_weights()
 
         self.reverse_input = reverse_input
         self.batch_first = batch_first
         self.hidden_size = hidden_size
+        self.reset_parameters()
 
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
@@ -160,9 +160,8 @@ class QuantGRULayer(torch.jit.ScriptModule):
         self.quant_sigmoid = self.configure_activation(self.activation_config, QuantSigmoid)
         self.quant_tanh = self.configure_activation(self.activation_config, QuantTanh)
 
-        self.norm_scale_newgate = self.configure_activation(norm_scale_newgate_config, QuantHardTanh)
+        self.norm_scale_newgate = self.configure_activation(norm_scale_hidden_config, QuantHardTanh)
         self.norm_scale_out = self.configure_activation(norm_scale_out_config, QuantHardTanh)
-        self._all_weights = []
 
         if self.weight_config.get('weight_quant_type', 'QuantType.FP') == 'QuantType.FP' and compute_output_bit_width:
             raise Exception("Computing output bit width requires enabling quantization")
@@ -422,7 +421,7 @@ class BidirGRULayer(torch.jit.ScriptModule):
     __constants__ = ['directions']
 
     def __init__(self, input_size, hidden_size, weight_config, activation_config, norm_scale_out_config,
-                 norm_scale_newgate_config,
+                 norm_scale_hidden_config,
                  compute_output_scale=False, compute_output_bit_width=False,
                  return_quant_tensor=False):
         super(BidirGRULayer, self).__init__()
@@ -430,14 +429,14 @@ class BidirGRULayer(torch.jit.ScriptModule):
             QuantGRULayer(input_size=input_size, hidden_size=hidden_size, weight_config=weight_config,
                           activation_config=activation_config,
                           norm_scale_out_config=norm_scale_out_config,
-                          norm_scale_newgate_config=norm_scale_newgate_config,
+                          norm_scale_hidden_config=norm_scale_hidden_config,
                           reverse_input=False, compute_output_scale=compute_output_scale,
                           compute_output_bit_width=compute_output_bit_width,
                           return_quant_tensor=return_quant_tensor),
             QuantGRULayer(input_size=input_size, hidden_size=hidden_size, weight_config=weight_config,
                           activation_config=activation_config,
                           norm_scale_out_config=norm_scale_out_config,
-                          norm_scale_newgate_config=norm_scale_newgate_config,
+                          norm_scale_hidden_config=norm_scale_hidden_config,
                           reverse_input=True, compute_output_scale=compute_output_scale,
                           compute_output_bit_width=compute_output_bit_width,
                           return_quant_tensor=return_quant_tensor),

@@ -33,7 +33,7 @@ class TestLSTMQuant:
         q_gru = QuantGRULayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
                               weight_config=weight_config,
                               norm_scale_out_config=hardtanh_activation_config,
-                              norm_scale_newgate_config=hardtanh_activation_config)
+                              norm_scale_hidden_config=hardtanh_activation_config)
         q_gru.eval()
 
         # Control
@@ -69,7 +69,7 @@ class TestLSTMQuant:
         q_gru = BidirGRULayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
                               weight_config=weight_config,
                               norm_scale_out_config=hardtanh_activation_config,
-                              norm_scale_newgate_config=hardtanh_activation_config)
+                              norm_scale_hidden_config=hardtanh_activation_config)
         q_gru.eval()
 
         # Control
@@ -102,7 +102,7 @@ class TestLSTMQuant:
         q_gru = QuantGRULayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
                               weight_config=weight_config,
                               norm_scale_out_config=hardtanh_activation_config,
-                              norm_scale_newgate_config=hardtanh_activation_config)
+                              norm_scale_hidden_config=hardtanh_activation_config)
         assert True
 
     def test_BFQGRU(self):
@@ -125,7 +125,7 @@ class TestLSTMQuant:
         q_gru = QuantGRULayer(INPUT_SIZE, HIDDEN, activation_config=activation_config,
                               weight_config=weight_config,
                               norm_scale_out_config=hardtanh_activation_config,
-                              norm_scale_newgate_config=hardtanh_activation_config, batch_first=True)
+                              norm_scale_hidden_config=hardtanh_activation_config, batch_first=True)
         q_gru.eval()
 
         # Control

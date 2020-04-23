@@ -147,11 +147,11 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
         self.bias_a = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
         self.bias_o = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
 
-        self.init_weights()
 
         self.reverse_input = reverse_input
         self.batch_first = batch_first
         self.hidden_size = hidden_size
+        self.reset_parameters()
 
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR

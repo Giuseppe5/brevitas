@@ -127,10 +127,10 @@ class QuantRNNLayer(torch.jit.ScriptModule):
         self.weight_rh = weight_rh
 
         self.bias_r = nn.Parameter(torch.randn(hidden_size), requires_grad=True)
-
         self.reverse_input = reverse_input
         self.hidden_size = hidden_size
         self.batch_first = batch_first
+        self.reset_parameters()
 
         self.weight_config['weight_scaling_shape'] = SCALING_SCALAR_SHAPE
         self.weight_config['weight_stats_input_view_shape_impl'] = StatsInputViewShapeImpl.OVER_TENSOR
