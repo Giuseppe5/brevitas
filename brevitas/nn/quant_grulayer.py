@@ -88,6 +88,7 @@ from typing import Tuple, List
 from torch import Tensor
 from brevitas.core import ZERO_HW_SENTINEL_NAME, ZERO_HW_SENTINEL_VALUE
 from collections import OrderedDict
+import math
 
 OVER_BATCH_OVER_CHANNELS_SHAPE = (1, -1, 1, 1)
 
@@ -169,21 +170,10 @@ class QuantGRULayer(torch.jit.ScriptModule):
                 compute_output_scale and compute_output_bit_width):
             raise Exception("Quantizing bias requires to compute output scale and output bit width")
 
-    def init_weights(self):
-        # Xavier uniform for gates
-        torch.nn.init.xavier_uniform_(self.weight_ri)
-        torch.nn.init.xavier_uniform_(self.weight_ci)
-        torch.nn.init.xavier_uniform_(self.weight_ni)
-
-        torch.nn.init.xavier_uniform_(self.weight_rh)
-        torch.nn.init.xavier_uniform_(self.weight_ch)
-        torch.nn.init.xavier_uniform_(self.weight_nh)
-
-        # Zeros for bias
-        torch.nn.init.zeros_(self.bias_r)
-        torch.nn.init.zeros_(self.bias_i)
-        torch.nn.init.zeros_(self.bias_ni)
-        torch.nn.init.zeros_(self.bias_nh)
+    def reset_parameters(self):
+        stdv = 1.0 / math.sqrt(self.hidden_size)
+        for weight in self.parameters():
+            torch.nn.init.uniform_(weight, -stdv, stdv)
 
     @torch.jit.script_method
     def forward_iteration(self, input, state,
@@ -364,7 +354,8 @@ class QuantGRULayer(torch.jit.ScriptModule):
                                                         scaling_impl_type=activation_config.get('scaling_impl_type',
                                                                                                 ScalingImplType.CONST),
                                                         scaling_stats_sigma=None,
-                                                        scaling_stats_op=None,
+                                                        scaling_stats_op=activation_config.get('scaling_stats_op',
+                                                                                               StatsOp.MAX),
                                                         scaling_stats_buffer_momentum=None,
                                                         scaling_stats_permute_dims=None)
 

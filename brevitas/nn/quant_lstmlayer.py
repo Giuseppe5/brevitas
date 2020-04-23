@@ -88,6 +88,7 @@ from typing import Tuple, List, Optional
 from torch import Tensor
 from brevitas.core import ZERO_HW_SENTINEL_NAME, ZERO_HW_SENTINEL_VALUE
 from collections import namedtuple, OrderedDict
+import math
 
 OVER_BATCH_OVER_CHANNELS_SHAPE = (1, -1, 1, 1)
 LSTMState = namedtuple('LSTMState', ['hx', 'cx'])
@@ -178,23 +179,10 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
                 compute_output_scale and compute_output_bit_width):
             raise Exception("Quantizing bias requires to compute output scale and output bit width")
 
-    def init_weights(self):
-        # Xavier uniform for gates
-        torch.nn.init.xavier_uniform_(self.weight_ci)
-        torch.nn.init.xavier_uniform_(self.weight_fi)
-        torch.nn.init.xavier_uniform_(self.weight_ai)
-        torch.nn.init.xavier_uniform_(self.weight_oh)
-
-        torch.nn.init.xavier_uniform_(self.weight_ch)
-        torch.nn.init.xavier_uniform_(self.weight_fh)
-        torch.nn.init.xavier_uniform_(self.weight_ah)
-        torch.nn.init.xavier_uniform_(self.weight_nh)
-
-        # Zeros for bias, Ones for bias of forget gate
-        torch.nn.init.zeros_(self.bias_i)
-        torch.nn.init.ones_(self.bias_f)
-        torch.nn.init.zeros_(self.bias_a)
-        torch.nn.init.zeros_(self.bias_o)
+    def reset_parameters(self):
+        stdv = 1.0 / math.sqrt(self.hidden_size)
+        for weight in self.parameters():
+            torch.nn.init.uniform_(weight, -stdv, stdv)
 
     @torch.jit.script_method
     def forward_iteration(self, input, hx, cx,
@@ -384,7 +372,8 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
                                                                                                None),
                                                         scaling_impl_type=ScalingImplType.CONST,
                                                         scaling_stats_sigma=None,
-                                                        scaling_stats_op=None,
+                                                        scaling_stats_op=activation_config.get('scaling_stats_op',
+                                                                                               StatsOp.MAX),
                                                         scaling_stats_buffer_momentum=None,
                                                         scaling_stats_permute_dims=None)
 

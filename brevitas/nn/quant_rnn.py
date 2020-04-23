@@ -83,6 +83,7 @@ from brevitas.quant_tensor import QuantTensor
 from brevitas.core.function_wrapper import ConstScalarClamp
 from brevitas.nn.quant_layer import SCALING_MIN_VAL
 import torch
+import math
 
 from typing import Optional, Tuple, List
 from torch import Tensor
@@ -147,13 +148,10 @@ class QuantRNNLayer(torch.jit.ScriptModule):
                 compute_output_scale and compute_output_bit_width):
             raise Exception("Quantizing bias requires to compute output scale and output bit width")
 
-    def init_weights(self):
-        # Xavier uniform for gates
-        torch.nn.init.xavier_uniform_(self.weight_ri)
-        torch.nn.init.xavier_uniform_(self.weight_rh)
-
-        # Zeros for bias, Ones for bias of forget gate
-        torch.nn.init.zeros_(self.bias_r)
+    def reset_parameters(self):
+        stdv = 1.0 / math.sqrt(self.hidden_size)
+        for weight in self.parameters():
+            torch.nn.init.uniform_(weight, -stdv, stdv)
 
     @torch.jit.script_method
     def forward_iteration(self, input, state, quant_weight_ri, quant_weight_rh):
@@ -309,7 +307,8 @@ class QuantRNNLayer(torch.jit.ScriptModule):
                                                                                                None),
                                                         scaling_impl_type=ScalingImplType.CONST,
                                                         scaling_stats_sigma=None,
-                                                        scaling_stats_op=None,
+                                                        scaling_stats_op=activation_config.get('scaling_stats_op',
+                                                                                               StatsOp.MAX),
                                                         scaling_stats_buffer_momentum=None,
                                                         scaling_stats_permute_dims=None)
 
