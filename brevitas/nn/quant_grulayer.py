@@ -142,7 +142,6 @@ class QuantGRULayer(torch.jit.ScriptModule):
         self.bias_ni = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
         self.bias_nh = nn.Parameter(torch.zeros(hidden_size), requires_grad=True)
 
-
         self.reverse_input = reverse_input
         self.batch_first = batch_first
         self.hidden_size = hidden_size
@@ -352,11 +351,16 @@ class QuantGRULayer(torch.jit.ScriptModule):
                                                                                                None),
                                                         scaling_impl_type=activation_config.get('scaling_impl_type',
                                                                                                 ScalingImplType.CONST),
-                                                        scaling_stats_sigma=None,
+                                                        scaling_stats_sigma=activation_config.get('scaling_stats_sigma',
+                                                                                                  2.0),
                                                         scaling_stats_op=activation_config.get('scaling_stats_op',
                                                                                                StatsOp.MAX),
-                                                        scaling_stats_buffer_momentum=None,
-                                                        scaling_stats_permute_dims=None)
+                                                        scaling_stats_buffer_momentum=activation_config.get(
+                                                            'scaling_stats_buffer_momentum',
+                                                            0.1),
+                                                        scaling_stats_permute_dims=activation_config.get(
+                                                            'scaling_stats_permute_dims',
+                                                            (1, 0, 2, 3)))
 
         return activation_object
 
