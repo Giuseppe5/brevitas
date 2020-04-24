@@ -120,7 +120,7 @@ class QuantRNNLayer(torch.jit.ScriptModule):
         self.weight_config = weight_config
         self.activation_config = activation_config
 
-        weight_ri = nn.Parameter(torch.randn(hidden_size, input_size), requires_grad=True)
+        weight_ri = nn.Parameter(torch.randn(input_size, hidden_size), requires_grad=True)
         weight_rh = nn.Parameter(torch.randn(hidden_size, hidden_size), requires_grad=True)
 
         self.weight_ri = weight_ri
@@ -157,9 +157,8 @@ class QuantRNNLayer(torch.jit.ScriptModule):
     def forward_iteration(self, input, state, quant_weight_ri, quant_weight_rh):
 
         zero_hw_sentinel = getattr(self, 'zero_hw_sentinel')
-
-        gates_ri = torch.mm(input, quant_weight_ri.t())
-        gates_rh = torch.mm(state, quant_weight_rh.t())
+        gates_ri = torch.mm(input, quant_weight_ri)
+        gates_rh = torch.mm(state, quant_weight_rh)
 
         rgate = (gates_ri + gates_rh) + self.bias_r
 
@@ -345,7 +344,7 @@ class QuantRNNLayer(torch.jit.ScriptModule):
 
     def fix_state_dict(self, prefix, state_dict):
         newstate = OrderedDict()
-        hidden = self.weight_ri.shape[0]
+        hidden = self.hidden_size
         bias_r = torch.zeros(hidden)
         prefix_len = len(prefix)
         for name, value in state_dict.items():
@@ -354,9 +353,9 @@ class QuantRNNLayer(torch.jit.ScriptModule):
             elif name[:prefix_len + 7] == prefix + 'bias_hh':
                 bias_r = bias_r + value
             elif name[:prefix_len + 9] == prefix + 'weight_ih':
-                newstate[prefix + 'weight_ri'] = value[:, :]
+                newstate[prefix + 'weight_ri'] = value.t()
             elif name[:prefix_len + 9] == prefix + 'weight_hh':
-                newstate[prefix + 'weight_rh'] = value[:, :]
+                newstate[prefix + 'weight_rh'] = value.t()
             else:
                 newstate[name] = value
 
