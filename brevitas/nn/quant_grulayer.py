@@ -156,7 +156,8 @@ class QuantGRULayer(torch.jit.ScriptModule):
         self.weight_proxy_i = self.configure_weight([weight_ci, weight_ch], self.weight_config)
         self.weight_proxy_n = self.configure_weight([weight_ni, weight_nh], self.weight_config)
 
-        self.quant_sigmoid = self.configure_activation(self.activation_config, QuantSigmoid)
+        self.quant_sigmoid_r = self.configure_activation(self.activation_config, QuantSigmoid)
+        self.quant_sigmoid_c = self.configure_activation(self.activation_config, QuantSigmoid)
         self.quant_tanh = self.configure_activation(self.activation_config, QuantTanh)
 
         self.norm_scale_newgate = self.configure_activation(norm_scale_hidden_config, QuantHardTanh)
@@ -187,8 +188,8 @@ class QuantGRULayer(torch.jit.ScriptModule):
         rgate = rgate + self.bias_r
         cgate = cgate + self.bias_i
 
-        rgate = self.quant_sigmoid(rgate, zero_hw_sentinel)[0]
-        cgate = self.quant_sigmoid(cgate, zero_hw_sentinel)[0]
+        rgate = self.quant_sigmoid_r(rgate, zero_hw_sentinel)[0]
+        cgate = self.quant_sigmoid_c(cgate, zero_hw_sentinel)[0]
         gates_ni = self.norm_scale_newgate(gates_ni, zero_hw_sentinel)[0] + \
                    self.norm_scale_newgate(rgate * gates_nh, zero_hw_sentinel)[0]
         ngate = self.quant_tanh(gates_ni, zero_hw_sentinel)[0]

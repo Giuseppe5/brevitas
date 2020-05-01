@@ -163,8 +163,11 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
         self.weight_proxy_a = self.configure_weight([weight_ai, weight_ah], self.weight_config)
         self.weight_proxy_o = self.configure_weight([weight_oi, weight_oh], self.weight_config)
 
-        self.quant_sigmoid = self.configure_activation(self.activation_config, QuantSigmoid)
-        self.quant_tanh = self.configure_activation(self.activation_config, QuantTanh)
+        self.quant_sigmoid_c = self.configure_activation(self.activation_config, QuantSigmoid)
+        self.quant_sigmoid_f = self.configure_activation(self.activation_config, QuantSigmoid)
+        self.quant_sigmoid_o = self.configure_activation(self.activation_config, QuantSigmoid)
+        self.quant_tanh_c = self.configure_activation(self.activation_config, QuantTanh)
+        self.quant_tanh_h = self.configure_activation(self.activation_config, QuantTanh)
         self.normalize_hidden_state = self.configure_activation(norm_scale_hidden_config, QuantHardTanh)
 
         self.out_quant = self.configure_activation(norm_scale_out_config, QuantHardTanh)
@@ -198,14 +201,14 @@ class QuantLSTMLayer(torch.jit.ScriptModule):
         cellgate = cellgate + self.bias_a
         outgate = outgate + self.bias_o
 
-        cgate = self.quant_sigmoid(cgate, zero_hw_sentinel)[0]
-        forgetgate = self.quant_sigmoid(forgetgate, zero_hw_sentinel)[0]
-        cellgate = self.quant_tanh(cellgate, zero_hw_sentinel)[0]
-        outgate = self.quant_sigmoid(outgate, zero_hw_sentinel)[0]
+        cgate = self.quant_sigmoid_c(cgate, zero_hw_sentinel)[0]
+        forgetgate = self.quant_sigmoid_f(forgetgate, zero_hw_sentinel)[0]
+        cellgate = self.quant_tanh_c(cellgate, zero_hw_sentinel)[0]
+        outgate = self.quant_sigmoid_o(outgate, zero_hw_sentinel)[0]
 
         cx = self.normalize_hidden_state(cx, zero_hw_sentinel)[0]
         cy = (forgetgate * cx) + (cgate * cellgate)
-        hy = outgate * self.quant_tanh(cy, zero_hw_sentinel)[0]
+        hy = outgate * self.quant_tanh_h(cy, zero_hw_sentinel)[0]
         hy1 = self.out_quant(hy, zero_hw_sentinel)[0]
         hy2 = self.rec_quant(hy, zero_hw_sentinel)[0]
 
