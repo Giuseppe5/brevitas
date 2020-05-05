@@ -236,7 +236,8 @@ class QuantGRULayer(torch.jit.ScriptModule):
         batch_size = inputs_unbided[0].shape[0]
 
         if state is None:
-            state = torch.zeros(batch_size, self.hidden_size)
+            device = self.weight_ri.device
+            state = torch.zeros(batch_size, self.hidden_size, device=device)
 
         start = 0
         end = len(inputs_unbided)
