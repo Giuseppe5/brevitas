@@ -251,7 +251,7 @@ class AudioDataset(Dataset):
         return f, fl, torch.tensor(t).long(), torch.tensor(tl).long()
 
     def __len__(self):
-        return len(self.manifest)
+        return len(self.collection)
 
 class AudioLabelDataset(Dataset):
     """

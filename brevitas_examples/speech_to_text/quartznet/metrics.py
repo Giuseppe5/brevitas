@@ -16,7 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from typing import List
-
+import torch
 
 def __levenshtein(a: List, b: List) -> int:
     """Calculates the Levenshtein distance between a and b.
@@ -79,9 +79,7 @@ def word_error_rate(hypotheses: List[str],
         wer = float('inf')
     return wer
 
-def classification_accuracy(
-    logits: torch.Tensor, targets: torch.Tensor, top_k: Optional[List[int]] = None
-) -> List[float]:
+def classification_accuracy(logits, targets, top_k=None):
     """
     Computes the top-k classification accuracy provided with
     un-normalized logits of a model and ground truth targets.
