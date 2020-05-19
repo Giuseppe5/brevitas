@@ -56,6 +56,14 @@ def init_weights(m, mode='xavier_uniform'):
             nn.init.zeros_(m.bias)
 
 
+def compute_new_kernel_size(kernel_size, kernel_width):
+    new_kernel_size = max(int(kernel_size * kernel_width), 1)
+    # If kernel is even shape, round up to make it odd
+    if new_kernel_size % 2 == 0:
+        new_kernel_size += 1
+    return new_kernel_size
+
+
 def get_same_padding(kernel_size, stride, dilation):
     if stride > 1 and dilation > 1:
         raise ValueError("Only stride OR dilation may be greater than 1")
@@ -141,7 +149,7 @@ class JasperBlock(nn.Module):
                  absolute_act_val,
                  activation_inner_scaling_per_output_channel, activation_other_scaling_per_output_channel,
                  weight_scaling_per_output_channel,
-                 repeat=3, kernel_size=11, stride=1,
+                 repeat=3, kernel_size=11, kernel_size_factor=1, stride=1,
                  dilation=1, padding='same', dropout=0.2, activation=None,
                  residual=True, groups=1, separable=False,
                  heads=-1, normalization="batch",
@@ -162,7 +170,14 @@ class JasperBlock(nn.Module):
         self.conv_module_to_merge = []
         inplanes_loop = inplanes
         conv = nn.ModuleList()
+
+        kernel_size_factor = float(kernel_size_factor)
+        if type(kernel_size) in (list, tuple):
+            kernel_size = [compute_new_kernel_size(k, kernel_size_factor) for k in kernel_size]
+        else:
+            kernel_size = compute_new_kernel_size(kernel_size, kernel_size_factor)
         self.norm_depthwise = nn.ModuleList()
+
         for _ in range(repeat - 1):
             if separable:
                 self.norm_depthwise.extend(

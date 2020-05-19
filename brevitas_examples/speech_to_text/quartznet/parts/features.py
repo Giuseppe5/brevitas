@@ -36,10 +36,8 @@ CONSTANT = 1e-5
 
 def normalize_batch(x, seq_len, normalize_type):
     if normalize_type == "per_feature":
-        x_mean = torch.zeros((seq_len.shape[0], x.shape[1]), dtype=x.dtype,
-                             device=x.device)
-        x_std = torch.zeros((seq_len.shape[0], x.shape[1]), dtype=x.dtype,
-                            device=x.device)
+        x_mean = torch.zeros((seq_len.shape[0], x.shape[1]), dtype=x.dtype, device=x.device)
+        x_std = torch.zeros((seq_len.shape[0], x.shape[1]), dtype=x.dtype,device=x.device)
         for i in range(x.shape[0]):
             x_mean[i, :] = x[i, :, :seq_len[i]].mean(dim=1)
             x_std[i, :] = x[i, :, :seq_len[i]].std(dim=1)
@@ -55,9 +53,12 @@ def normalize_batch(x, seq_len, normalize_type):
         # make sure x_std is not zero
         x_std += CONSTANT
         return (x - x_mean.view(-1, 1, 1)) / x_std.view(-1, 1, 1)
+    elif "fixed_mean" in normalize_type and "fixed_std" in normalize_type:
+        x_mean = torch.tensor(normalize_type["fixed_mean"], device=x.device)
+        x_std = torch.tensor(normalize_type["fixed_std"], device=x.device)
+        return (x - x_mean.view(x.shape[0], x.shape[1]).unsqueeze(2)) / x_std.view(x.shape[0], x.shape[1]).unsqueeze(2)
     else:
         return x
-
 
 def splice_frames(x, frame_splicing):
     """ Stacks frames together across feature dim

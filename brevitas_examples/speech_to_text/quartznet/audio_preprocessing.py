@@ -486,29 +486,6 @@ class SpectrogramAugmentation(nn.Module):
         return augmented_spec
 
 
-class MultiplyBatch(nn.Module):
-    """
-    Augmentation that repeats each element in a batch.
-    Other augmentations can be applied afterwards.
-
-    Args:
-        mult_batch (int): number of repeats
-    """
-
-    def __init__(self, *, mult_batch=1):
-        nn.Module.__init__(self)
-        self.mult = mult_batch
-
-    @torch.no_grad()
-    def forward(self, in_x, in_x_len, in_y, in_y_len):
-        out_x = in_x.repeat(self.mult, 1, 1)
-        out_y = in_y.repeat(self.mult, 1)
-        out_x_len = in_x_len.repeat(self.mult)
-        out_y_len = in_y_len.repeat(self.mult)
-
-        return out_x, out_x_len, out_y, out_y_len
-
-
 def AudioPreprocessing(*args, **kwargs):
     raise NotImplementedError(
         "AudioPreprocessing has been deprecated and replaced by: "

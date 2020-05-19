@@ -27,7 +27,8 @@ import torch
 from torch.utils.data import Dataset
 
 from .manifest import ManifestBase, ManifestEN
-
+from .collections import ASRSpeechLabel, ASRAudioText
+from .parsers import make_parser
 
 def seq_collate_fn(batch, token_pad_value=0):
     """collate batch of audio sig, audio len, tokens, tokens len
@@ -59,6 +60,55 @@ def seq_collate_fn(batch, token_pad_value=0):
             pad = (0, max_tokens_len - tokens_i_len)
             tokens_i = torch.nn.functional.pad(
                 tokens_i, pad, value=token_pad_value)
+        tokens.append(tokens_i)
+
+    if has_audio:
+        audio_signal = torch.stack(audio_signal)
+        audio_lengths = torch.stack(audio_lengths)
+    else:
+        audio_signal, audio_lengths = None, None
+    tokens = torch.stack(tokens)
+    tokens_lengths = torch.stack(tokens_lengths)
+
+    return audio_signal, audio_lengths, tokens, tokens_lengths
+
+
+def fixed_seq_collate_fn(batch, fixed_length=16000):
+    """collate batch of audio sig, audio len, tokens, tokens len
+
+    Args:
+        batch (Optional[FloatTensor], Optional[LongTensor], LongTensor,
+               LongTensor):  A tuple of tuples of signal, signal lengths,
+               encoded tokens, and encoded tokens length.  This collate func
+               assumes the signals are 1d torch tensors (i.e. mono audio).
+        fixed_length (Optional[int]): length of input signal to be considered
+
+    """
+    _, audio_lengths, _, tokens_lengths = zip(*batch)
+
+    has_audio = audio_lengths[0] is not None
+    fixed_length = min(fixed_length, max(audio_lengths))
+
+    audio_signal, tokens = [], []
+    for sig, sig_len, tokens_i, _ in batch:
+        if has_audio:
+            sig_len = sig_len.item()
+            chunck_len = sig_len - fixed_length
+            if chunck_len < 0:
+                # pad = (0,fixed_length-sig_len)
+                # signal = torch.nn.functional.pad(sig,pad)
+                repeat = fixed_length // sig_len
+                rem = fixed_length % sig_len
+                sub = sig[-rem:] if rem > 0 else torch.tensor([])
+                rep_sig = torch.cat(repeat * [sig])
+                signal = torch.cat((rep_sig, sub))
+                # print(sig_len,repeat,rem,len(sub),len(rep_sig),len(signal))
+            else:
+                start_idx = torch.randint(0, chunck_len, (1,)) if chunck_len else torch.tensor(0)
+                end_idx = start_idx + fixed_length
+                signal = sig[start_idx:end_idx]
+
+            audio_signal.append(signal)
         tokens.append(tokens_i)
 
     if has_audio:
@@ -151,43 +201,46 @@ class AudioDataset(Dataset):
             eos_id=None,
             logger=False,
             load_audio=True,
-            manifest_class=ManifestEN):
-        m_paths = manifest_filepath.split(',')
-        self.manifest = manifest_class(m_paths, labels,
-                                       max_duration=max_duration,
-                                       min_duration=min_duration,
-                                       max_utts=max_utts,
-                                       blank_index=blank_index,
-                                       unk_index=unk_index,
-                                       normalize=normalize,
-                                       logger=logger)
+            parser='en',
+    ):
+        self.collection = ASRAudioText(
+            manifests_files=manifest_filepath.split(','),
+            parser=make_parser(
+                labels=labels, name=parser, unk_id=unk_index, blank_id=blank_index, do_normalize=normalize,
+            ),
+            min_duration=min_duration,
+            max_duration=max_duration,
+            max_number=max_utts,
+        )
+
         self.featurizer = featurizer
         self.trim = trim
         self.eos_id = eos_id
         self.bos_id = bos_id
         self.load_audio = load_audio
-        if logger:
-            logger.info(
-                "Dataset loaded with {0:.2f} hours. Filtered {1:.2f} "
-                "hours.".format(
-                    self.manifest.duration / 3600,
-                    self.manifest.filtered_duration / 3600))
+        # if logger:
+        #     logger.info(
+        #         "Dataset loaded with {0:.2f} hours. Filtered {1:.2f} "
+        #         "hours.".format(
+        #             self.manifest.duration / 3600,
+        #             self.manifest.filtered_duration / 3600))
 
     def __getitem__(self, index):
-        sample = self.manifest[index]
+        sample = self.collection[index]
         if self.load_audio:
-            duration = sample['duration'] if 'duration' in sample else 0
-            offset = sample['offset'] if 'offset' in sample else 0
-            features = self.featurizer.process(sample['audio_filepath'],
-                                               offset=offset,
-                                               duration=duration,
-                                               trim=self.trim)
+            offset = sample.offset
+
+            if offset is None:
+                offset = 0
+
+            features = self.featurizer.process(
+                sample.audio_file, offset=offset, duration=sample.duration, trim=self.trim,
+            )
             f, fl = features, torch.tensor(features.shape[0]).long()
-            # f = f / (torch.max(torch.abs(f)) + 1e-5)
         else:
             f, fl = None, None
 
-        t, tl = sample["tokens"], len(sample["tokens"])
+        t, tl = sample.text_tokens, len(sample.text_tokens)
         if self.bos_id is not None:
             t = [self.bos_id] + t
             tl += 1
@@ -195,9 +248,85 @@ class AudioDataset(Dataset):
             t = t + [self.eos_id]
             tl += 1
 
-        return \
-            f, fl, \
-            torch.tensor(t).long(), torch.tensor(tl).long()
+        return f, fl, torch.tensor(t).long(), torch.tensor(tl).long()
 
     def __len__(self):
         return len(self.manifest)
+
+class AudioLabelDataset(Dataset):
+    """
+    Dataset that loads tensors via a json file containing paths to audio
+    files, command class, and durations (in seconds). Each new line is a
+    different sample. Example below:
+
+    {"audio_filepath": "/path/to/audio.wav", "label":
+    "label", "duration": 23.147}
+    ...
+    {"audio_filepath": "/path/to/audio.wav", "label": "label",
+    "offset": 301.75, "duration": 0.82}
+
+    Args:
+        manifest_filepath: Path to manifest json as described above. Can
+            be comma-separated paths.
+        labels (Optional[list]): String containing all the possible labels to map to
+            if None then automatically picks from ASRSpeechLabel collection.
+        featurizer: Initialized featurizer class that converts paths of
+            audio to feature tensors
+        max_duration: If audio exceeds this length, do not include in dataset
+        min_duration: If audio is less than this length, do not include
+            in dataset
+        trim: Boolean flag whether to trim the audio
+        load_audio: Boolean flag indicate whether do or not load audio
+    """
+
+    def __init__(
+        self,
+        manifest_filepath,
+        featurizer,
+        labels=None,
+        max_duration=None,
+        min_duration=None,
+        trim=False,
+        load_audio=True,
+    ):
+        self.collection = ASRSpeechLabel(
+            manifests_files=manifest_filepath.split(','), min_duration=min_duration, max_duration=max_duration,
+        )
+
+        self.featurizer = featurizer
+        self.trim = trim
+        self.load_audio = load_audio
+
+        self.labels = labels if labels else self.collection.uniq_labels
+        self.num_commands = len(self.labels)
+
+        self.label2id, self.id2label = {}, {}
+        for label_id, label in enumerate(self.labels):
+            self.label2id[label] = label_id
+            self.id2label[label_id] = label
+
+        for idx in range(len(self.labels[:5])):
+            print(" label id {} and its mapped label {}".format(idx, self.id2label[idx]))
+
+    def __getitem__(self, index):
+        sample = self.collection[index]
+        if self.load_audio:
+            offset = sample.offset
+
+            if offset is None:
+                offset = 0
+
+            features = self.featurizer.process(
+                sample.audio_file, offset=offset, duration=sample.duration, trim=self.trim
+            )
+            f, fl = features, torch.tensor(features.shape[0]).long()
+        else:
+            f, fl = None, None
+
+        t = self.label2id[sample.label]
+        tl = 1  # For compatibility with collate_fn used later
+
+        return f, fl, torch.tensor(t).long(), torch.tensor(tl).long()
+
+    def __len__(self):
+        return len(self.collection)
