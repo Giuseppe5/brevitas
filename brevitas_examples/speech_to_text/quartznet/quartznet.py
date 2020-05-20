@@ -20,12 +20,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
-
+import copy
 from .audio_preprocessing import AudioToMelSpectrogramPreprocessor
 from .parts.quartznet import JasperBlock, init_weights
 from .parts.common import *
 from .greedy_ctc_decoder import GreedyCTCDecoder
-
+from .parts.common import QUANT_TYPE
 
 class JasperEncoder(nn.Module):
     """
@@ -206,6 +206,53 @@ class JasperDecoderForCTC(nn.Module):
         return F.log_softmax(self.decoder_layers(encoder_output).
                              transpose(1, 2), dim=-1)
 
+
+class JasperDecoderForClassification(nn.Module):
+    """
+        Jasper Decoder creates the final layer in Jasper that maps from the outputs
+        of Jasper Encoder to one class label.
+
+        Args:
+            feat_in (int): Number of channels being input to this module
+            num_classes (int): Number of characters in ASR model's vocab/labels.
+                This count should not include the CTC blank symbol.
+            init_mode (str): Describes how neural network parameters are
+                initialized. Options are ['xavier_uniform', 'xavier_normal',
+                'kaiming_uniform','kaiming_normal'].
+                Defaults to "xavier_uniform".
+        """
+
+    def __init__(
+        self, *, feat_in, num_classes, init_mode="xavier_uniform", return_logits=True, pooling_type='avg'
+    ):
+        nn.Module.__init__(self)
+
+        self._feat_in = feat_in
+        self._return_logits = return_logits
+        self._num_classes = num_classes
+
+        if pooling_type == 'avg':
+            self.pooling = nn.AdaptiveAvgPool1d(1)
+        elif pooling_type == 'max':
+            self.pooling = nn.AdaptiveMaxPool1d(1)
+        else:
+            raise ValueError('Pooling type chosen is not valid. Must be either `avg` or `max`')
+
+        self.decoder_layers = nn.Sequential(nn.Linear(self._feat_in, self._num_classes, bias=True))
+        self.apply(lambda x: init_weights(x, mode=init_mode))
+
+    def forward(self, encoder_output):
+        batch, in_channels, timesteps = encoder_output.size()
+
+        encoder_output = self.pooling(encoder_output).view(batch, in_channels)  # [B, C]
+        logits = self.decoder_layers(encoder_output)  # [B, num_classes]
+
+        if self._return_logits:
+            return logits
+
+        return logits
+
+
 class Quartznet(nn.Module):
     def __init__(self, preprocessing, encoder, decoder, greedyctcdecoder):
         super(Quartznet, self).__init__()
@@ -215,7 +262,7 @@ class Quartznet(nn.Module):
         self.greedy_ctc_decoder = greedyctcdecoder
 
     def forward(self, input_tensors):
-        audio_signal_e1, a_sig_length_e1, _, _ = input_tensors
+        audio_signal_e1, a_sig_length_e1, *remaining_fields = input_tensors
         processed_signal_e1, p_length_e1 = self.preprocessing(
             input_signal=audio_signal_e1,
             length=a_sig_length_e1)
@@ -274,3 +321,32 @@ def quartznet(cfg, quartzet_params):
     model = Quartznet(data_preprocessor, encoder, decoder, greedy_decoder)
     return model
 
+def quartznet_speech(cfg, quartznet_params):
+
+    labels = quartznet_params['labels']  # Vocab of tokens
+    sample_rate = quartznet_params['sample_rate']
+    train_dl_params = copy.deepcopy(quartznet_params["AudioToSpeechLabelDataLayer"])
+    train_dl_params.update(quartznet_params["AudioToSpeechLabelDataLayer"]["train"])
+    del train_dl_params["train"]
+    del train_dl_params["eval"]
+
+    QUANT_TYPE = QuantType.FP
+    encoder = JasperEncoder(
+        weight_scaling_per_output_channel=False,
+        inner_bit_width=8,
+        outer_bit_width=8,
+        absolute_act_val=1,
+        activation_inner_scaling_per_output_channel=False,
+        activation_other_scaling_per_output_channel=False,
+        fused_bn=False,
+        **quartznet_params["JasperEncoder"])
+
+    decoder = JasperDecoderForClassification(
+        feat_in=quartznet_params["JasperEncoder"]["jasper"][-1]["filters"],
+        num_classes=len(labels)+2,
+        **quartznet_params['JasperDecoderForClassification'],
+    )
+
+    model = Quartznet(nn.Identity(), encoder, decoder, nn.Identity())
+
+    return model
