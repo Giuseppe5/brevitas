@@ -254,7 +254,7 @@ class JasperDecoderForClassification(nn.Module):
 
 
 class Quartznet(nn.Module):
-    def __init__(self, preprocessing, encoder, decoder, greedyctcdecoder):
+    def __init__(self, encoder, decoder, preprocessing=None, greedyctcdecoder=None):
         super(Quartznet, self).__init__()
         self.preprocessing = preprocessing
         self.encoder = encoder
@@ -263,14 +263,20 @@ class Quartznet(nn.Module):
 
     def forward(self, input_tensors):
         audio_signal_e1, a_sig_length_e1, *remaining_fields = input_tensors
-        processed_signal_e1, p_length_e1 = self.preprocessing(
-            input_signal=audio_signal_e1,
-            length=a_sig_length_e1)
+        if self.preprocessing is not None:
+            processed_signal_e1, p_length_e1 = self.preprocessing(
+                input_signal=audio_signal_e1,
+                length=a_sig_length_e1)
+        else:
+            processed_signal_e1, p_length_e1 = audio_signal_e1, a_sig_length_e1
         encoded_e1, encoded_len_e1 = self.encoder(
             audio_signal=processed_signal_e1,
             length=p_length_e1)
         log_probs_e1 = self.decoder(encoder_output=encoded_e1)
-        predictions_e1 = self.greedy_ctc_decoder(log_probs=log_probs_e1)
+        if self.greedy_ctc_decoder is not None:
+            predictions_e1 = self.greedy_ctc_decoder(log_probs=log_probs_e1)
+        else:
+            predictions_e1 = log_probs_e1
         return predictions_e1
 
     def restore_checkpoints(self, encoder_state_dict, decoder_state_dict):
@@ -318,7 +324,7 @@ def quartznet(cfg, quartzet_params):
 
     greedy_decoder = GreedyCTCDecoder()
 
-    model = Quartznet(data_preprocessor, encoder, decoder, greedy_decoder)
+    model = Quartznet(encoder, decoder, preprocessing=data_preprocessor, greedyctcdecoder=greedy_decoder)
     return model
 
 def quartznet_speech(cfg, quartznet_params):
@@ -347,6 +353,6 @@ def quartznet_speech(cfg, quartznet_params):
         **quartznet_params['JasperDecoderForClassification'],
     )
 
-    model = Quartznet(nn.Identity(), encoder, decoder, nn.Identity())
+    model = Quartznet(encoder, decoder)
 
     return model
