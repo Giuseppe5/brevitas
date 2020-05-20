@@ -33,7 +33,8 @@ __all__ = ['AudioToTextDataLayer',
            'quartznet',
            'quant_quartznet_perchannelscaling_4b',
            'quant_quartznet_perchannelscaling_8b',
-           'quant_quartznet_pertensorscaling_8b']
+           'quant_quartznet_pertensorscaling_8b',
+           'fp_quartznet_speech']
 
 name = "quarznet_release"
 model_impl = {
