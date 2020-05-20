@@ -20,7 +20,7 @@
 from .data_layer import (
         AudioToTextDataLayer)
 from .greedy_ctc_decoder import GreedyCTCDecoder
-from .quartznet import quartznet
+from .quartznet import quartznet, quartznet_speech
 from .losses import CTCLossNM
 from .helpers import *
 
@@ -38,6 +38,7 @@ __all__ = ['AudioToTextDataLayer',
 name = "quarznet_release"
 model_impl = {
     'quartznet': quartznet,
+    'quartznet_speech': quartznet_speech
 }
 
 
