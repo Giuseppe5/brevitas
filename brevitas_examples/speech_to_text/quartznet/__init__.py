@@ -78,3 +78,7 @@ def quant_quartznet_perchannelscaling_8b(pretrained=True):
 def quant_quartznet_pertensorscaling_8b(pretrained=True):
     model, _ = model_with_cfg('quant_quartznet_pertensorscaling_8b', pretrained)
     return model
+
+def fp_quartznet_speech(pretrained=False):
+    model, _ = model_with_cfg('fp_quartznet_speech', pretrained)
+    return model
