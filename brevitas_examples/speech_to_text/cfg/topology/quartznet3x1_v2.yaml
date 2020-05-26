@@ -53,7 +53,7 @@ SpectrogramAugmentation:
     rect_freq: 15
 
 JasperEncoder:
-    feat_in: 10
+    feat_in: *n_mels
     activation: "relu"
     conv_mask: true
 
@@ -120,4 +120,4 @@ JasperDecoderForClassification:
     return_logits: True
     pooling_type: 'avg'
 
-labels:  ['yes','no','up','down','left','right','on','off','stop','go']
+labels: ['visual', 'wow', 'learn', 'backward', 'dog', 'two', 'left', 'happy', 'nine', 'go', 'up', 'bed', 'stop', 'one', 'zero', 'tree', 'seven', 'on', 'four', 'bird', 'right', 'eight', 'no', 'six', 'forward', 'house', 'marvin', 'sheila', 'five', 'off', 'three', 'down', 'cat', 'follow', 'yes']

@@ -1,10 +1,7 @@
 # Copyright (c) 2019 NVIDIA Corporation
 import collections
-import json
 import os
-from typing import Any, Dict, List, Optional, Union
 
-import pandas as pd
 
 from .manifest import *
 from .parsers import *
@@ -15,62 +12,62 @@ class _Collection(collections.UserList):
     OUTPUT_TYPE = None  # Single element output type.
 
 
-class Text(_Collection):
-    """Simple list of preprocessed text entries, result in list of tokens."""
-
-    OUTPUT_TYPE = collections.namedtuple('TextEntity', 'tokens')
-
-    def __init__(self, texts: List[str], parser: CharParser):
-        """Instantiates text manifest and do the preprocessing step.
-
-        Args:
-            texts: List of raw texts strings.
-            parser: Instance of `CharParser` to convert string to tokens.
-        """
-
-        data, output_type = [], self.OUTPUT_TYPE
-        for text in texts:
-            tokens = parser(text)
-
-            if tokens is None:
-                print("Fail to parse '%s' text line.", text)
-                continue
-
-            data.append(output_type(tokens))
-
-        super().__init__(data)
-
-
-class FromFileText(Text):
-    """Another form of texts manifest with reading from file."""
-
-    def __init__(self, file: str, parser: CharParser):
-        """Instantiates text manifest and do the preprocessing step.
-
-        Args:
-            file: File path to read from.
-            parser: Instance of `CharParser` to convert string to tokens.
-        """
-
-        texts = self.__parse_texts(file)
-
-        super().__init__(texts, parser)
-
-    @staticmethod
-    def __parse_texts(file: str) -> List[str]:
-        if not os.path.exists(file):
-            raise ValueError('Provided texts file does not exists!')
-
-        _, ext = os.path.splitext(file)
-        if ext == '.csv':
-            texts = pd.read_csv(file)['transcript'].tolist()
-        elif ext == '.json':  # Not really a correct json.
-            texts = list(item['text'] for item in item_iter(file))
-        else:
-            with open(file, 'r') as f:
-                texts = f.readlines()
-
-        return texts
+# class Text(_Collection):
+#     """Simple list of preprocessed text entries, result in list of tokens."""
+#
+#     OUTPUT_TYPE = collections.namedtuple('TextEntity', 'tokens')
+#
+#     def __init__(self, texts: List[str], parser: CharParser):
+#         """Instantiates text manifest and do the preprocessing step.
+#
+#         Args:
+#             texts: List of raw texts strings.
+#             parser: Instance of `CharParser` to convert string to tokens.
+#         """
+#
+#         data, output_type = [], self.OUTPUT_TYPE
+#         for text in texts:
+#             tokens = parser(text)
+#
+#             if tokens is None:
+#                 print("Fail to parse '%s' text line.", text)
+#                 continue
+#
+#             data.append(output_type(tokens))
+#
+#         super().__init__(data)
+#
+#
+# class FromFileText(Text):
+#     """Another form of texts manifest with reading from file."""
+#
+#     def __init__(self, file: str, parser: CharParser):
+#         """Instantiates text manifest and do the preprocessing step.
+#
+#         Args:
+#             file: File path to read from.
+#             parser: Instance of `CharParser` to convert string to tokens.
+#         """
+#
+#         texts = self.__parse_texts(file)
+#
+#         super().__init__(texts, parser)
+#
+#     @staticmethod
+#     def __parse_texts(file: str) -> List[str]:
+#         if not os.path.exists(file):
+#             raise ValueError('Provided texts file does not exists!')
+#
+#         _, ext = os.path.splitext(file)
+#         if ext == '.csv':
+#             texts = pd.read_csv(file)['transcript'].tolist()
+#         elif ext == '.json':  # Not really a correct json.
+#             texts = list(item['text'] for item in item_iter(file))
+#         else:
+#             with open(file, 'r') as f:
+#                 texts = f.readlines()
+#
+#         return texts
 
 
 class AudioText(_Collection):

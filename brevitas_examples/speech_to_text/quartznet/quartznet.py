@@ -330,13 +330,11 @@ def quartznet(cfg, quartzet_params):
 def quartznet_speech(cfg, quartznet_params):
 
     labels = quartznet_params['labels']  # Vocab of tokens
-    sample_rate = quartznet_params['sample_rate']
     train_dl_params = copy.deepcopy(quartznet_params["AudioToSpeechLabelDataLayer"])
     train_dl_params.update(quartznet_params["AudioToSpeechLabelDataLayer"]["train"])
     del train_dl_params["train"]
     del train_dl_params["eval"]
 
-    QUANT_TYPE = QuantType.FP
     encoder = JasperEncoder(
         weight_scaling_per_output_channel=False,
         inner_bit_width=8,
@@ -349,7 +347,7 @@ def quartznet_speech(cfg, quartznet_params):
 
     decoder = JasperDecoderForClassification(
         feat_in=quartznet_params["JasperEncoder"]["jasper"][-1]["filters"],
-        num_classes=len(labels)+2,
+        num_classes=len(labels),
         **quartznet_params['JasperDecoderForClassification'],
     )
 

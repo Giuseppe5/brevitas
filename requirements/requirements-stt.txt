@@ -8,3 +8,4 @@ torch-stft
 sox
 tqdm
 soundfile
+frozendict

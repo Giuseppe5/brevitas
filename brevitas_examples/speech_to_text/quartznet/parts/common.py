@@ -38,7 +38,7 @@ brevitas_activations = {
     "relu": quant_nn.QuantReLU,
 }
 
-QUANT_TYPE = QuantType.INT
+QUANT_TYPE = QuantType.FP
 QUANT_TYPE_BIAS = QuantType.FP
 
 SCALING_MIN_VAL = 2e-16
