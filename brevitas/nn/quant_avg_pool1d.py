@@ -88,7 +88,7 @@ class QuantAvgPool1d(QuantLayer, AvgPool1d):
         input_tensor, input_scale, input_bit_width = self.unpack_input(input)
         x = super(QuantAvgPool1d, self).forward(input_tensor)
         if self.quant_type != QuantType.FP:
-            x = x * self.kernel_size  # remove scaling introduced by average
+            x = x * self.kernel_size[0]  # remove scaling introduced by average
             output_bit_width = self.max_output_bit_width(input_bit_width)
             x, output_scale, output_bit_width = self.accumulator_quant(x, input_scale, output_bit_width)
             return pack_quant_tensor(x, output_scale, output_bit_width)
@@ -97,6 +97,6 @@ class QuantAvgPool1d(QuantLayer, AvgPool1d):
 
     def max_output_bit_width(self, input_bit_width):
         max_uint_input = max_uint(bit_width=input_bit_width, narrow_range=False)
-        max_uint_output = max_uint_input * self.kernel_size
+        max_uint_output = max_uint_input * self.kernel_size[0]
         max_output_bit_width = ceil_ste(torch.log2(max_uint_output))
         return max_output_bit_width
