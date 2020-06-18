@@ -5,6 +5,7 @@
 import torch.nn as nn
 import math
 import torch
+from brevitas.core.scaling import SCALING_SCALAR_SHAPE
 
 try:
     from scipy.linalg import hadamard
@@ -23,8 +24,12 @@ class HadamardClassifier(QuantLayer, nn.Module):
                  out_channels,
                  fixed_scale=False,
                  compute_output_scale: bool = False,
+                 scaling_per_output_channel: bool = True,
                  compute_output_bit_width: bool = False,
-                 return_quant_tensor: bool = False):
+                 return_quant_tensor: bool = False,
+                 track_running_norm: bool = False,
+                 momentum: float = 0.1,
+                 ):
         QuantLayer.__init__(self,
                             compute_output_scale=compute_output_scale,
                             compute_output_bit_width=compute_output_bit_width,
@@ -35,14 +40,29 @@ class HadamardClassifier(QuantLayer, nn.Module):
 
         self.out_channels = out_channels
         self.in_channels = in_channels
+        if scaling_per_output_channel:
+            scaling_shape = (self.out_channels)
+        else:
+            scaling_shape = SCALING_SCALAR_SHAPE
+
         sz = 2 ** int(math.ceil(math.log(max(in_channels, out_channels), 2)))
         mat = torch.from_numpy(hadamard(sz)).float()
         self.register_buffer('proj', mat)
         init_scale = 1. / math.sqrt(self.out_channels)
         if fixed_scale:
-            self.register_buffer('scale', torch.tensor(init_scale))
+            self.register_buffer('scale', init_scale * torch.ones(scaling_shape))
         else:
-            self.scale = nn.Parameter(torch.tensor(init_scale))
+            self.scale = nn.Parameter(init_scale * torch.ones(scaling_shape))
+        if flipped_signed:
+            self.sign = -1
+        else:
+            self.sign = 1
+
+        self.track_running_norm = track_running_norm
+        self.momentum = momentum
+        if self.track_running_norm:
+            self.register_buffer('running_norm', torch.zeros(SCALING_SCALAR_SHAPE))
+
         self.eps = 1e-8
 
     def forward(self, x):
@@ -50,8 +70,15 @@ class HadamardClassifier(QuantLayer, nn.Module):
         output_bit_width = None
         x, input_scale, input_bit_width = self.unpack_input(x)
         norm = x.norm(p='fro', keepdim=True) + self.eps
-        x = x / norm
-        out = - self.scale * nn.functional.linear(x, self.proj[:self.out_channels, :self.in_channels])
+        if self.track_running_norm and self.training:
+            self.running_norm = (1 - self.momentum) * self.running_norm + self.momentum * norm.detach()
+
+        if self.track_running_norm and not self.training:
+            x = x / self.running_norm
+        else:
+            x = x / norm
+
+        out = self.sign * self.scale * nn.functional.linear(x, self.proj[:self.out_channels, :self.in_channels])
         if self.compute_output_scale:
             output_scale = input_scale * self.scale / norm
         if self.compute_output_bit_width:
