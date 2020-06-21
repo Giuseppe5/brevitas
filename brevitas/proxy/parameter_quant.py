@@ -48,7 +48,7 @@ import torch
 from torch import nn, Tensor
 
 from brevitas.core import ZERO_HW_SENTINEL_NAME
-from brevitas.core.bit_width import BitWidthConst, BitWidthParameter, BitWidthImplType, IdentityBitWidth
+from brevitas.core.bit_width import BitWidthConst, BitWidthParameter, BitWidthStatelessBuffer, BitWidthImplType, IdentityBitWidth
 from brevitas.core.function_wrapper import TensorClampSte, TensorClamp
 from brevitas.core.quant import IdentityQuant
 from brevitas.core.quant import QuantType, BinaryQuant, TernaryQuant, RescalingIntQuant
@@ -192,6 +192,8 @@ def _weight_quant_init_impl(bit_width: Optional[int],
                                                        min_overall_bit_width=min_overall_bit_width,
                                                        max_overall_bit_width=max_overall_bit_width,
                                                        override_pretrained=override_pretrained_bit_width)
+                elif bit_width_impl_type == BitWidthImplType.STATELESS_BUFFER:
+                    bit_width_impl = BitWidthStatelessBuffer(bit_width, restrict_bit_width_type)
                 else:
                     raise Exception("Bit width type {} not supported for weight quantization."
                                     .format(str(bit_width_impl_type)))
@@ -199,6 +201,7 @@ def _weight_quant_init_impl(bit_width: Optional[int],
                 bit_width_impl = bit_width_impl_override
 
             if bit_width_impl_type != BitWidthImplType.CONST or \
+                    bit_width_impl_type != BitWidthImplType.STATELESS_BUFFER or \
                     bit_width_impl_type == BitWidthImplType.CONST and \
                     norm_impl_type == NormImplType.SAME_AS_SCALING and \
                     scaling_impl_type != ScalingImplType.STATS:

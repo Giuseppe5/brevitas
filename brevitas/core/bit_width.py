@@ -60,6 +60,7 @@ REMOVE_ZERO_BIT_WIDTH = 0.1
 class BitWidthImplType(AutoName):
     CONST = auto()
     PARAMETER = auto()
+    STATELESS_BUFFER = auto()
 
 class IdentityBitWidth(torch.jit.ScriptModule):
 
@@ -88,6 +89,33 @@ class BitWidthConst(torch.jit.ScriptModule):
     def forward(self, zero_hw_sentinel: Tensor) -> Tensor:
         return self.bit_width + zero_hw_sentinel
 
+
+class BitWidthStatelessBuffer(torch.jit.ScriptModule):
+    __constants__ = ['bit_width']
+
+    def __init__(self, bit_width_init: int, restrict_bit_width_type: RestrictValueType) -> None:
+        super(BitWidthConst, self).__init__()
+
+        if restrict_bit_width_type != RestrictValueType.INT:
+            raise Exception("When bit width is predefined, it has to be an INT value.")
+
+        self.register_buffer('bit_width', int(bit_width_init))
+
+    @torch.jit.script_method
+    def forward(self, zero_hw_sentinel: Tensor) -> Tensor:
+        return self.bit_width + zero_hw_sentinel
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+        key = prefix + 'bit_width'
+        del state_dict[key]
+        super(BitWidthParameter, self)._load_from_state_dict(state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs)
+
+    def state_dict(self, destination=None, prefix='', keep_vars=False):
+        state_dict = super(BitWidthStatelessBuffer, self).state_dict(destination, prefix, keep_vars)
+        del state_dict[prefix + 'bit_width']
+        return state_dict
 
 class BitWidthParameter(torch.jit.ScriptModule):
     __constants__ = ['bit_width_base', 'max_bit_width', 'override_pretrained']
