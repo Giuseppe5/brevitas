@@ -230,7 +230,7 @@ class Stats(torch.jit.ScriptModule):
                  sigma: Optional[float]) -> None:
         super(Stats, self).__init__()
 
-        if stats_reduce_dim is not None and len(stats_output_shape) < 2 and stats_op != StatsOp.MAX_AVE:
+        if stats_reduce_dim is not None and len(stats_output_shape) < 2 and stats_op != StatsOp.MAX_AVE  and stats_op != StatsOp.MAX_L2:
             raise Exception("Defining a reduce dimension requires the output view shape to have at least 2 dims.")
         if  len(stats_output_shape) > 1 and stats_reduce_dim is None:
             raise Exception("Defining an output view shape with more than 1 dims assumes a not None reduce dim.")
@@ -245,6 +245,8 @@ class Stats(torch.jit.ScriptModule):
             self.stats_impl = AbsAve(reduce_dim=stats_reduce_dim)
         elif stats_op == StatsOp.MAX_AVE:
             self.stats_impl = AbsMaxAve(reduce_dim=stats_reduce_dim)
+        elif stats_op == StatsOp.MAX_L2:
+            self.stats_impl = AbsMaxL2(reduce_dim=stats_reduce_dim)
         elif stats_op == StatsOp.MEAN_SIGMA_STD or stats_op == StatsOp.MEAN_LEARN_SIGMA_STD:
             const_sigma = None
             learned_sigma = None
