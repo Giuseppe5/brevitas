@@ -94,7 +94,7 @@ class BitWidthStatelessBuffer(torch.jit.ScriptModule):
     __constants__ = ['bit_width']
 
     def __init__(self, bit_width_init: int, restrict_bit_width_type: RestrictValueType) -> None:
-        super(BitWidthConst, self).__init__()
+        super(BitWidthStatelessBuffer, self).__init__()
 
         if restrict_bit_width_type != RestrictValueType.INT:
             raise Exception("When bit width is predefined, it has to be an INT value.")
@@ -109,7 +109,7 @@ class BitWidthStatelessBuffer(torch.jit.ScriptModule):
                               missing_keys, unexpected_keys, error_msgs):
         key = prefix + 'bit_width'
         del state_dict[key]
-        super(BitWidthParameter, self)._load_from_state_dict(state_dict, prefix, local_metadata, strict,
+        super(BitWidthStatelessBuffer, self)._load_from_state_dict(state_dict, prefix, local_metadata, strict,
             missing_keys, unexpected_keys, error_msgs)
 
     def state_dict(self, destination=None, prefix='', keep_vars=False):
