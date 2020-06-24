@@ -99,7 +99,7 @@ class BitWidthStatelessBuffer(torch.jit.ScriptModule):
         if restrict_bit_width_type != RestrictValueType.INT:
             raise Exception("When bit width is predefined, it has to be an INT value.")
 
-        self.register_buffer('bit_width', int(bit_width_init))
+        self.register_buffer('bit_width', torch.tensor(bit_width_init))
 
     @torch.jit.script_method
     def forward(self, zero_hw_sentinel: Tensor) -> Tensor:
