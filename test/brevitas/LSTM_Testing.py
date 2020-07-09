@@ -13,7 +13,7 @@ parser.add_argument("--type", type=str, default="basic")
 
 LSTMState = namedtuple('LSTMState', ['hx', 'cx'])
 
-BATCH_SZIE = 128
+BATCH_SIZE = 128
 FEAT_IN = 64
 SEQ_LENGTH = 512
 
@@ -29,34 +29,34 @@ def flatten_states(states):
 def test_basic():
     lstm = nn.LSTM(input_size=FEAT_IN, hidden_size=HIDDEN_SIZE)
     lstm.cuda()
-    inp = torch.rand(SEQ_LENGTH, BATCH_SZIE, FEAT_IN, device=next(lstm.parameters()).device)
-    state = [LSTMState(torch.randn(BATCH_SZIE, HIDDEN_SIZE, device=next(lstm.parameters()).device),
-                       torch.randn(BATCH_SZIE, HIDDEN_SIZE, device=next(lstm.parameters()).device))]
+    inp = torch.rand(SEQ_LENGTH, BATCH_SIZE, FEAT_IN, device=next(lstm.parameters()).device)
+    state = [LSTMState(torch.randn(BATCH_SIZE, HIDDEN_SIZE, device=next(lstm.parameters()).device),
+                       torch.randn(BATCH_SIZE, HIDDEN_SIZE, device=next(lstm.parameters()).device))]
     lstm_state = flatten_states(state)
     start = time.process_time()
-    for _ in range(100):
+    for _ in range(1000):
         _ = lstm(inp, lstm_state)
     end = time.process_time() - start
-    end = end/100
+    end = end/1000.0
     print("Default LSTM took {} seconds".format(end))
 
 
 def test_lstm_highlevel(jit):
-    inp = torch.rand(SEQ_LENGTH, BATCH_SZIE, FEAT_IN)
-    state = [LSTMState(torch.randn(BATCH_SZIE, HIDDEN_SIZE),
-                       torch.randn(BATCH_SZIE, HIDDEN_SIZE))]
     lstm = script_lstm(FEAT_IN, HIDDEN_SIZE, num_layers=1)
+    lstm.cuda()
+    inp = torch.rand(SEQ_LENGTH, BATCH_SIZE, FEAT_IN, device=next(lstm.parameters()).device)
+    state = [LSTMState(torch.randn(BATCH_SIZE, HIDDEN_SIZE, device=next(lstm.parameters()).device),
+                       torch.randn(BATCH_SIZE, HIDDEN_SIZE, device=next(lstm.parameters()).device))]
     start = time.process_time()
-    for _ in range(100):
+    for _ in range(1000):
         _ = lstm(inp, state)
     end = time.process_time() - start
-    end = (end / (10 ** 9))/100
+    end = end/1000.0
     print("High Level LSTM, JIT {}, took {} seconds".format(jit, end))
 
 
 
 def test_lstm_brevitas(jit):
-    inp = torch.rand(SEQ_LENGTH, BATCH_SZIE, FEAT_IN)
     weight_config = {
         'weight_quant_type': 'INT'
     }
@@ -68,17 +68,19 @@ def test_lstm_brevitas(jit):
         'min_val': -1e32,
         'max_val': 1e32
     }
-    state = LSTMState(torch.zeros(BATCH_SZIE, HIDDEN_SIZE),
-                      torch.zeros(BATCH_SZIE, HIDDEN_SIZE))
     lstm = qnn.QuantLSTMLayer(input_size=FEAT_IN, hidden_size=HIDDEN_SIZE, weight_config=weight_config,
                               activation_config=activation_config,
                               norm_scale_hidden_config=hidden_activation_config,
                               norm_scale_out_config=hidden_activation_config)
+    lstm.cuda()
+    inp = torch.rand(SEQ_LENGTH, BATCH_SIZE, FEAT_IN, device=next(lstm.parameters()).device)
+    state = LSTMState(torch.randn(BATCH_SIZE, HIDDEN_SIZE, device=next(lstm.parameters()).device),
+                       torch.randn(BATCH_SIZE, HIDDEN_SIZE, device=next(lstm.parameters()).device))
     start = time.process_time()
-    for _ in range(100):
+    for _ in range(1000):
         _ = lstm(inp, state)
     end = time.process_time() - start
-    end = (end / (10 ** 9))/100
+    end = end/1000.0
     print("Brevitas LSTM, JIT {}, took {} seconds".format(jit, end))
 
 
