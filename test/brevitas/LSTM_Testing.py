@@ -27,16 +27,17 @@ def flatten_states(states):
 
 
 def test_basic():
-    inp = torch.rand(SEQ_LENGTH, BATCH_SZIE, FEAT_IN)
-    state = [LSTMState(torch.randn(BATCH_SZIE, HIDDEN_SIZE),
-                       torch.randn(BATCH_SZIE, HIDDEN_SIZE))]
-    lstm_state = flatten_states(state)
     lstm = nn.LSTM(input_size=FEAT_IN, hidden_size=HIDDEN_SIZE)
-    start = time.time_ns()
+    lstm.cuda()
+    inp = torch.rand(SEQ_LENGTH, BATCH_SZIE, FEAT_IN, device=next(lstm.parameters()).device)
+    state = [LSTMState(torch.randn(BATCH_SZIE, HIDDEN_SIZE, device=next(lstm.parameters()).device),
+                       torch.randn(BATCH_SZIE, HIDDEN_SIZE, device=next(lstm.parameters()).device))]
+    lstm_state = flatten_states(state)
+    start = time.process_time()
     for _ in range(100):
         _ = lstm(inp, lstm_state)
-    end = time.time_ns() - start
-    end = (end / (10 ** 9))/100
+    end = time.process_time() - start
+    end = end/100
     print("Default LSTM took {} seconds".format(end))
 
 
@@ -45,10 +46,10 @@ def test_lstm_highlevel(jit):
     state = [LSTMState(torch.randn(BATCH_SZIE, HIDDEN_SIZE),
                        torch.randn(BATCH_SZIE, HIDDEN_SIZE))]
     lstm = script_lstm(FEAT_IN, HIDDEN_SIZE, num_layers=1)
-    start = time.time_ns()
+    start = time.process_time()
     for _ in range(100):
         _ = lstm(inp, state)
-    end = time.time_ns() - start
+    end = time.process_time() - start
     end = (end / (10 ** 9))/100
     print("High Level LSTM, JIT {}, took {} seconds".format(jit, end))
 
@@ -73,10 +74,10 @@ def test_lstm_brevitas(jit):
                               activation_config=activation_config,
                               norm_scale_hidden_config=hidden_activation_config,
                               norm_scale_out_config=hidden_activation_config)
-    start = time.time_ns()
+    start = time.process_time()
     for _ in range(100):
         _ = lstm(inp, state)
-    end = time.time_ns() - start
+    end = time.process_time() - start
     end = (end / (10 ** 9))/100
     print("Brevitas LSTM, JIT {}, took {} seconds".format(jit, end))
 
@@ -85,7 +86,7 @@ def test_lstm_brevitas(jit):
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    os.environ["PYTORCH_JIT"] = 1 if args.jit else 0
+    os.environ["PYTORCH_JIT"] = "1" if args.jit else "0"
     if args.type == "basic":
         test_basic()
     elif args.type == "high_level":
