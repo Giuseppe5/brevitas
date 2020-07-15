@@ -84,7 +84,32 @@ def test_lstm_brevitas(jit):
     print("Brevitas LSTM, JIT {}, took {} seconds".format(jit, end))
 
 
-
+def test_lstm_weight_brevitas(jit):
+    weight_config = {
+        'weight_quant_type': 'INT'
+    }
+    activation_config = {
+        'quant_type': 'FP'
+    }
+    hidden_activation_config = {
+        'quant_type': 'FP',
+        'min_val': -1e32,
+        'max_val': 1e32
+    }
+    lstm = qnn.QuantLSTMLayer(input_size=FEAT_IN, hidden_size=HIDDEN_SIZE, weight_config=weight_config,
+                              activation_config=activation_config,
+                              norm_scale_hidden_config=hidden_activation_config,
+                              norm_scale_out_config=hidden_activation_config)
+    lstm.cuda()
+    inp = torch.rand(SEQ_LENGTH, BATCH_SIZE, FEAT_IN, device=next(lstm.parameters()).device)
+    state = LSTMState(torch.randn(BATCH_SIZE, HIDDEN_SIZE, device=next(lstm.parameters()).device),
+                       torch.randn(BATCH_SIZE, HIDDEN_SIZE, device=next(lstm.parameters()).device))
+    start = time.process_time()
+    for _ in range(1000):
+        _ = lstm(inp, state)
+    end = time.process_time() - start
+    end = end/1000.0
+    print("Brevitas Weight-Only LSTM, JIT {}, took {} seconds".format(jit, end))
 
 if __name__ == '__main__':
     args = parser.parse_args()
