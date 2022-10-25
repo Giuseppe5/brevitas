@@ -1,22 +1,23 @@
 import numpy as np
 import pytest
-from pytest_cases import parametrize
+from pytest_cases import parametrize, set_case_id
 from torch import nn
 
 from brevitas.quant.scaled_int import Int32Bias
-from brevitas_ort.common import *
+from .common import *
 
 
 class QuantWBIOLCases:
 
-    @parametrize('impl', QUANT_WBIOL_IMPL)
+    @parametrize('impl', QUANT_WBIOL_IMPL, ids=[f'{c.__name__}' for c in QUANT_WBIOL_IMPL])
     @parametrize('input_bit_width', BIT_WIDTHS, ids=[f'i{b}' for b in BIT_WIDTHS])
     @parametrize('weight_bit_width', BIT_WIDTHS, ids=[f'w{b}' for b in BIT_WIDTHS])
     @parametrize('output_bit_width', BIT_WIDTHS, ids=[f'o{b}' for b in BIT_WIDTHS])
     @parametrize('per_channel', [True, False])
     @parametrize('quantizers', QUANTIZERS.values(), ids=list(QUANTIZERS.keys()))
     def case_quant_wbiol(
-            self, impl, input_bit_width, weight_bit_width, output_bit_width, per_channel, quantizers):
+            self, impl, input_bit_width, weight_bit_width, output_bit_width, per_channel, quantizers, request):
+        set_case_id(request.node.callspec.id, QuantWBIOLCases.case_quant_wbiol) # Change the case_id based on current value of Parameters
         weight_quant, io_quant = quantizers
         if impl is QuantLinear:
             layer_kwargs = {
