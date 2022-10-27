@@ -3,7 +3,6 @@ import pytest
 import torch
 import onnxruntime as ort
 import numpy as np
-from brevitas import export
 
 from brevitas.nn import QuantLinear, QuantConv1d, QuantConv2d
 from brevitas.nn import QuantConvTranspose1d, QuantConvTranspose2d
@@ -18,24 +17,29 @@ from brevitas.export import export_standard_qop_onnx, export_standard_qcdq_onnx
 OUT_CH = 16
 IN_CH = 8
 FEATURES = 5
-TOLERANCE = True
+TOLERANCE = 1
 KERNEL_SIZE = 1  # keep float error during fake-quantization under control
 BIT_WIDTHS = range(2, 9)
 QUANTIZERS = {
+    'asymmetric_float': (ShiftedUint8WeightPerTensorFloat, ShiftedUint8ActPerTensorFloat),
     'symmetric_float': (Int8WeightPerTensorFloat, Int8ActPerTensorFloat),
     'symmetric_fixed_point': (Int8WeightPerTensorFixedPoint, Int8ActPerTensorFixedPoint)}
 QUANT_WBIOL_IMPL = [
     QuantLinear, QuantConv1d, QuantConv2d, QuantConvTranspose1d, QuantConvTranspose2d]
 
 
+
 def compute_ort(export_name, np_input):
-    sess = ort.InferenceSession(export_name)
+    opt = ort.SessionOptions()
+    opt.use_deterministic_compute=True
+    opt.log_severity_level = 0
+    sess = ort.InferenceSession(export_name, opt)
     input_name = sess.get_inputs()[0].name
     pred_onx = sess.run(None, {input_name: np_input})[0]
     return pred_onx
 
 
-def is_brevitas_ort_close(model, np_input, export_name, export_type, tolerance_flag=False):
+def is_brevitas_ort_close(model, np_input, export_name, export_type, tolerance=None):
     input_t = torch.from_numpy(np_input)
     brevitas_output = model(input_t)
     if export_type == 'qop':
@@ -46,18 +50,16 @@ def is_brevitas_ort_close(model, np_input, export_name, export_type, tolerance_f
     else:
         raise RuntimeError(f"Export type {export_type} not recognized.")
 
-    if tolerance_flag:
-        if export_type == 'qcdq':
-            tolerance = brevitas_output.scale # Float Output, tolerance is +/- output scale
-        else:
-            tolerance = 1 # Input Output, tolerance is +/- output scale
+    if tolerance is not None and export_type == 'qcdq':
+        tolerance = tolerance * brevitas_output.scale # Float Output, tolerance is +/- output scale
 
     ort_output = compute_ort(export_name, np_input)
     ort_output = torch.from_numpy(ort_output)
-    if (ort_output == 0).all() and (brevitas_output == 0).all(): # make sure we are not comparing 0s
+
+    if (ort_output == 0).all() and (brevitas_output.value == 0).all(): # make sure we are not comparing 0s
         pytest.skip("Skip testing against all 0s.")
-    if tolerance_flag:
-        return (torch.abs(brevitas_output - ort_output) <= tolerance).all()
+    if tolerance is not None:
+        return torch.allclose(brevitas_output, ort_output, atol=tolerance)
     else:
         return (brevitas_output - ort_output == 0).all()
 

@@ -5,6 +5,7 @@ from torch import nn
 
 from brevitas.quant.scaled_int import Int32Bias
 from .common import *
+SEED = 123456
 
 
 class QuantWBIOLCases:
@@ -49,6 +50,8 @@ class QuantWBIOLCases:
 
             def forward(self, x):
                 return self.conv(x)
+
+        torch.random.manual_seed(SEED)
 
         module = Model()
         return module
