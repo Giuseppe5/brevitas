@@ -17,7 +17,7 @@ from brevitas.export import export_standard_qop_onnx, export_standard_qcdq_onnx
 OUT_CH = 16
 IN_CH = 8
 FEATURES = 5
-TOLERANCE = 1
+TOLERANCE = 1  # accept +1/-1 errors
 KERNEL_SIZE = 1  # keep float error during fake-quantization under control
 BIT_WIDTHS = range(2, 9)
 QUANTIZERS = {
@@ -54,7 +54,7 @@ def is_brevitas_ort_close(model, np_input, export_name, export_type, tolerance=N
         tolerance = tolerance * brevitas_output.scale # Float Output, tolerance is +/- output scale
 
     ort_output = compute_ort(export_name, np_input)
-    ort_output = torch.from_numpy(ort_output)
+    ort_output = torch.from_numpy(ort_output).type_as(brevitas_output)
 
     if (ort_output == 0).all() and (brevitas_output.value == 0).all(): # make sure we are not comparing 0s
         pytest.skip("Skip testing against all 0s.")
