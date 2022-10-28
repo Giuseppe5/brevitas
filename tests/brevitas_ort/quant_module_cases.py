@@ -1,5 +1,3 @@
-import numpy as np
-import pytest
 from pytest_cases import parametrize, set_case_id
 from torch import nn
 

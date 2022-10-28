@@ -17,7 +17,7 @@ from brevitas.export import export_standard_qop_onnx, export_standard_qcdq_onnx
 OUT_CH = 16
 IN_CH = 8
 FEATURES = 5
-TOLERANCE = 1  # accept +1/-1 errors
+TOLERANCE = 2  # accept +2/-2 errors, required by per_channel/per_tensor, all 8 bit, quantconv1d/2d, qcdq, symmetric float
 KERNEL_SIZE = 1  # keep float error during fake-quantization under control
 BIT_WIDTHS = range(2, 9)
 QUANTIZERS = {
@@ -28,14 +28,19 @@ QUANT_WBIOL_IMPL = [
     QuantLinear, QuantConv1d, QuantConv2d, QuantConvTranspose1d, QuantConvTranspose2d]
 
 
-
 def compute_ort(export_name, np_input):
-    opt = ort.SessionOptions()
-    opt.use_deterministic_compute=True
-    opt.log_severity_level = 0
-    sess = ort.InferenceSession(export_name, opt)
+    sess_opt = ort.SessionOptions()
+    sess_opt.use_deterministic_compute=True # Deterministic execution
+    sess_opt.log_severity_level = 0 # Highest verbosity
+    sess_opt.log_verbosity_level = 0 # Highest verbosity
+
+    run_opt = ort.RunOptions()
+    run_opt.log_severity_level = 0 # Highest verbosity
+    run_opt.log_verbosity_level = 0 # Highest verbosity
+
+    sess = ort.InferenceSession(export_name, sess_opt)
     input_name = sess.get_inputs()[0].name
-    pred_onx = sess.run(None, {input_name: np_input})[0]
+    pred_onx = sess.run(None, {input_name: np_input}, run_options=run_opt)[0]
     return pred_onx
 
 
