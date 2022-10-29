@@ -43,6 +43,7 @@ from setuptools import setup, find_packages
 import os
 
 
+
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 REQUIREMENTS_DIR = os.path.join(PROJECT_ROOT, 'requirements')
 
