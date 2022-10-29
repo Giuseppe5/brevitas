@@ -96,5 +96,3 @@ setup(name="brevitas",
               'brevitas_melgan_preprocess = brevitas_examples.text_to_speech.preprocess_dataset:main'
           ],
       })
-
-
