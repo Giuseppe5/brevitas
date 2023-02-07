@@ -26,17 +26,31 @@ from brevitas.graph.standardize import MeanMethodToAdaptiveAvgPool2d
 from brevitas.graph.standardize import TorchFunctionalToModule
 from brevitas.graph.utils import get_module
 import brevitas.nn as qnn
+from brevitas.nn.target.flexml import ShiftedUint8ActPerTensorFixedPoint
 from brevitas.quant import Int8ActPerTensorFixedPoint
+from brevitas.quant import Int8BiasPerTensorFloatInternalScaling
 from brevitas.quant import Int8WeightPerTensorFixedPoint
-from brevitas.quant import Int16Bias
 from brevitas.quant import Uint8ActPerTensorFixedPoint
 from brevitas.quant import Uint8ActPerTensorFixedPointMaxInit
+from brevitas.quant.scaled_int import Int8BiasPerTensorFloatInternalScaling
 
 ADD_FNS = [torch.add, operator.add, operator.iadd]
 
 ADD_METHODS = ['add', 'add_']
 CAT = brevitas.original_cat
 
+UNSIGNED_ACT = (
+    nn.ReLU,
+    nn.ReLU6,
+    nn.Sigmoid,
+)
+
+QUANT_ACT = (
+    qnn.QuantReLU,
+    qnn.QuantIdentity,
+    qnn.QuantHardTanh,
+    qnn.QuantSigmoid
+)
 
 QUANT_WBIOL_MAP = {
     nn.Conv1d: qnn.QuantConv1d,
@@ -82,11 +96,11 @@ def are_inputs_unsigned(model, node, is_unsigned_list):
     for inp_node in node.all_input_nodes:
         if inp_node.op == 'call_module':
             inp_module = get_module(model, inp_node.target)
-            if isinstance(inp_module, (nn.ReLU, nn.ReLU6)):
+            if isinstance(inp_module, UNSIGNED_ACT):
                 is_unsigned_list.append(True)
             elif isinstance(inp_module, tuple(SIGN_PRESERVING_MODULES)):
                 are_inputs_unsigned(model, inp_node, is_unsigned_list)
-            elif isinstance(inp_module, (qnn.QuantReLU, qnn.QuantIdentity, qnn.QuantHardTanh)):
+            elif isinstance(inp_module, QUANT_ACT):
                 is_unsigned_list.append(not inp_module.is_quant_act_signed)
             else:
                 is_unsigned_list.append(False)
@@ -118,16 +132,16 @@ def are_inputs_quantized(model, node, quantized_modules_list, same_sign):
     for inp_node in node.all_input_nodes:
         if inp_node.op == 'call_module':
             inp_module = get_module(model, inp_node.target)
-            if isinstance(inp_module, (nn.ReLU, nn.ReLU6)):
+            if isinstance(inp_module, UNSIGNED_ACT):
                 quantized_modules_list.append(None)
             elif isinstance(inp_module, tuple(SIGN_PRESERVING_MODULES)):
                 are_inputs_quantized(model, inp_node, quantized_modules_list, same_sign)
-            elif isinstance(inp_module, (qnn.QuantReLU, qnn.QuantIdentity, qnn.QuantHardTanh)):
+            elif isinstance(inp_module, QUANT_ACT):
                 tq = inp_module.act_quant.fused_activation_quant_proxy.tensor_quant
                 if _tensor_quant_in_list(tq, quantized_modules_list, same_sign):
                     continue
                 quantized_modules_list.append(tq)
-            elif isinstance(inp_module, qnn.flexml.FlexMLQuantLeakyReLU):
+            elif isinstance(inp_module, (qnn.flexml.FlexMLQuantLeakyReLU, qnn.flexml.FlexMLQuantSwish)):
                 tq = inp_module.output_quant.act_quant.fused_activation_quant_proxy.tensor_quant
                 if _tensor_quant_in_list(tq, quantized_modules_list, same_sign):
                     continue
@@ -165,7 +179,7 @@ def output_quant_handler(model, node, rewriters, is_sign_preserving):
         output_quant = True
         if user.op == 'call_module':
             user_module = get_module(model, user.target)
-            if isinstance(user_module, (qnn.QuantReLU, qnn.QuantIdentity, qnn.flexml.FlexMLQuantLeakyReLU)):
+            if isinstance(user_module, (qnn.QuantReLU, qnn.QuantIdentity, qnn.flexml.FlexMLQuantLeakyReLU, qnn.QuantSigmoid, qnn.flexml.FlexMLQuantSwish)):
                 output_quant = False
         if output_quant:
             if quant_module_name is None and quant_module is None:
@@ -246,6 +260,14 @@ def add_input_handler(model, node, quant_identity_name, quant_identity, rewriter
                 rewriter = ModuleToModuleByInstance(
                     module, qnn.flexml.FlexMLQuantLeakyReLU, output_quant=quant_identity)
                 rewriters.append(rewriter)
+            elif isinstance(module, qnn.flexml.FlexMLQuantSwish):
+                rewriter = ModuleToModuleByInstance(
+                    module, qnn.flexml.FlexMLQuantSwish,
+                    act_quant=ShiftedUint8ActPerTensorFixedPoint,
+                    scaling_impl=quant_identity.act_quant.fused_activation_quant_proxy.tensor_quant.scaling_impl,
+                    int_scaling_impl=quant_identity.act_quant.fused_activation_quant_proxy.tensor_quant.int_scaling_impl,
+                    return_quant_tensor=True)
+                rewriters.append(rewriter)
             else:
                 rewriters.append(InsertModuleCallAfter(quant_identity_name, inp_node))
         elif inp_node.op == 'call_function' and inp_node.target in [torch.flatten, torch.reshape, torch.transpose]:
@@ -277,6 +299,14 @@ def flexml_act_handler(model):
             elif isinstance(module, nn.LeakyReLU):
                 rewriter = ModuleToModuleByInstance(
                     module, qnn.flexml.FlexMLQuantLeakyReLU)
+                rewriters.append(rewriter)
+            elif isinstance(module, nn.SiLU):
+                rewriter = ModuleToModuleByInstance(
+                    module, qnn.flexml.FlexMLQuantSwish)
+                rewriters.append(rewriter)
+            elif isinstance(module, nn.Sigmoid):
+                rewriter = ModuleToModuleByInstance(
+                    module, qnn.QuantSigmoid)
                 rewriters.append(rewriter)
     for rewriter in rewriters:
         model = rewriter.apply(model)
@@ -346,7 +376,7 @@ def flexml_wbiol_handler(model):
                     module, QUANT_WBIOL_MAP[type(module)],
                     weight_quant=Int8WeightPerTensorFixedPoint,
                     weight_narrow_range=False,
-                    bias_quant=Int16Bias,
+                    bias_quant=Int8BiasPerTensorFloatInternalScaling,
                     return_quant_tensor=True)
                 rewriters.append(rewriter)
     for rewriter in rewriters:
@@ -364,7 +394,7 @@ def flexml_avgpool_handler(model, *model_args, avgpool_to_depthwise_conv=False, 
                 if avgpool_to_depthwise_conv:
                     rewriter = AvgPoolToQuantDepthwiseConv(
                         weight_quant=Int8WeightPerTensorFixedPoint,
-                        bias_quant=Int16Bias,
+                        bias_quant=Int8BiasPerTensorFloatInternalScaling,
                         return_quant_tensor=True)
                 else:
                     rewriter = ModuleToModuleByInstance(

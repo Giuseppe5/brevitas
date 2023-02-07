@@ -305,7 +305,7 @@ class QuantWeightBiasInputOutputLayer(
     def forward_impl(self, inp: Union[Tensor, QuantTensor]) -> Union[Tensor, QuantTensor]:
         output_scale = None
         output_bit_width = None
-        output_zero_point = None
+        output_zero_point = 0.
         output_signed = None
 
         inp = self.unpack_input(inp)
@@ -349,13 +349,13 @@ class QuantWeightBiasInputOutputLayer(
         else:
             output_tensor = self.inner_forward_impl(quant_input.value, quant_weight.value, None)
 
-        if self.return_quant_tensor and not self.is_output_quant_enabled:
-            if (quant_input.zero_point is not None
-                    and ((quant_input.zero_point != 0.0).any()
-                         or (quant_weight.zero_point != 0.0).any())):
-                raise RuntimeError("Computing zero point of output accumulator not supported yet.")
-            elif quant_input.zero_point is not None and output_zero_point is None:
-                output_zero_point = quant_input.zero_point
+        # if self.return_quant_tensor and not self.is_output_quant_enabled:
+        #     if (quant_input.zero_point is not None
+        #             and ((quant_input.zero_point != 0.0).any()
+        #                  or (quant_weight.zero_point != 0.0).any())):
+        #         raise RuntimeError("Computing zero point of output accumulator not supported yet.")
+        #     elif quant_input.zero_point is not None and output_zero_point is None:
+        #         output_zero_point = quant_input.zero_point
 
         quant_output = QuantTensor(
             value=output_tensor,

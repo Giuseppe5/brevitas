@@ -8,14 +8,24 @@ import torch
 from torch import nn
 from torch import Tensor
 
+from brevitas.core.function_wrapper.ops_ste import CeilSte
 from brevitas.core.utils import StatelessBuffer
 from brevitas.function.ops import max_int
 from brevitas.function.ops_ste import ceil_ste
+from brevitas.inject.enum import RestrictValueType
 import brevitas.nn as qnn
 from brevitas.nn.mixin import QuantLayerMixin
 from brevitas.quant import Int8ActPerTensorFixedPoint
 from brevitas.quant import Uint8ActPerTensorFixedPoint
+from brevitas.quant.shifted_scaled_int import ShiftedUint8ActPerTensorFloat
 from brevitas.quant_tensor import QuantTensor
+
+
+class ShiftedUint8ActPerTensorFixedPoint(ShiftedUint8ActPerTensorFloat):
+    scaling_per_output_channel = False
+    restrict_scaling_type = RestrictValueType.POWER_OF_TWO
+    bit_width = 8
+    restrict_value_float_to_int_impl = CeilSte
 
 
 class FlexMLQuantLeakyReLU(nn.Module):
@@ -37,6 +47,20 @@ class FlexMLQuantLeakyReLU(nn.Module):
         quant_alpha = self.alpha_quant(self.negative_slope())
         quant_alpha_out = self.input_quant(quant_inp * quant_alpha)
         out = torch.max(quant_inp, quant_alpha_out)
+        out = self.output_quant(out)
+        return out
+
+
+class FlexMLQuantSwish(nn.Module):
+
+    def __init__(
+            self,
+            output_quant=qnn.QuantIdentity(ShiftedUint8ActPerTensorFixedPoint, return_quant_tensor=True)):
+        super(FlexMLQuantSwish, self).__init__()
+        self.output_quant = output_quant
+
+    def forward(self, inp):
+        out = inp * torch.sigmoid(inp)
         out = self.output_quant(out)
         return out
 
