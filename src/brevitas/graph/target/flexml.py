@@ -26,12 +26,11 @@ from brevitas.graph.standardize import MeanMethodToAdaptiveAvgPool2d
 from brevitas.graph.standardize import TorchFunctionalToModule
 from brevitas.graph.utils import get_module
 import brevitas.nn as qnn
-from brevitas.nn.target.flexml import ShiftedUint8ActPerTensorFixedPoint
-from brevitas.quant import Int8ActPerTensorFixedPoint
-from brevitas.quant import Int8BiasPerTensorFloatInternalScaling
-from brevitas.quant import Int8WeightPerTensorFixedPoint
-from brevitas.quant import Uint8ActPerTensorFixedPoint
-from brevitas.quant import Uint8ActPerTensorFixedPointMaxInit
+from brevitas.nn.target.flexml import ShiftedUint8ActPerTensorFloat
+from brevitas.quant import Int8ActPerTensorFloat
+from brevitas.quant import Int8WeightPerTensorFloat
+from brevitas.quant import Uint8ActPerTensorFloat
+from brevitas.quant import Uint8ActPerTensorFloatMaxInit
 from brevitas.quant.scaled_int import Int8BiasPerTensorFloatInternalScaling
 
 ADD_FNS = [torch.add, operator.add, operator.iadd]
@@ -83,7 +82,7 @@ def flexml_inp_placeholder_handler(model):
     rewriters = []
     for node in model.graph.nodes:
         if node.op == 'placeholder':
-            inp_quant = qnn.QuantIdentity(Int8ActPerTensorFixedPoint, return_quant_tensor=True)
+            inp_quant = qnn.QuantIdentity(Int8ActPerTensorFloat, return_quant_tensor=True)
             name = node.name + '_quant'
             model.add_module(name, inp_quant)
             rewriters.append(InsertModuleCallAfter(name, node))
@@ -181,14 +180,16 @@ def output_quant_handler(model, node, rewriters, is_sign_preserving):
             user_module = get_module(model, user.target)
             if isinstance(user_module, (qnn.QuantReLU, qnn.QuantIdentity, qnn.flexml.FlexMLQuantLeakyReLU, qnn.QuantSigmoid, qnn.flexml.FlexMLQuantSwish)):
                 output_quant = False
+        elif user.op == 'call_function' and 'stochastic_depth' in user.name:
+            output_quant = False
         if output_quant:
             if quant_module_name is None and quant_module is None:
                 if is_sign_preserving and are_inputs_unsigned(model, node, []):
                     quant_module = qnn.QuantIdentity(
-                        act_quant=Uint8ActPerTensorFixedPoint, return_quant_tensor=True)
+                        act_quant=Uint8ActPerTensorFloat, return_quant_tensor=True)
                 else:
                     quant_module = qnn.QuantIdentity(
-                        act_quant=Int8ActPerTensorFixedPoint, return_quant_tensor=True)
+                        act_quant=Int8ActPerTensorFloat, return_quant_tensor=True)
                 quant_module_name = node.name + '_output_quant'
                 model.add_module(quant_module_name, quant_module)
             rewriters.append(InsertModuleCallAfter(quant_module_name, node))
@@ -239,7 +240,7 @@ def add_input_handler(model, node, quant_identity_name, quant_identity, rewriter
             elif isinstance(module, qnn.QuantReLU):
                 rewriter = ModuleToModuleByInstance(
                     module, qnn.QuantReLU,
-                    act_quant=Uint8ActPerTensorFixedPoint,
+                    act_quant=Uint8ActPerTensorFloat,
                     scaling_impl=quant_identity.act_quant.fused_activation_quant_proxy.tensor_quant.scaling_impl,
                     int_scaling_impl=quant_identity.act_quant.fused_activation_quant_proxy.tensor_quant.int_scaling_impl,
                     return_quant_tensor=True)
@@ -251,7 +252,7 @@ def add_input_handler(model, node, quant_identity_name, quant_identity, rewriter
                     assert not module.is_quant_act_signed and quant_identity.is_quant_act_signed
                     rewriter = ModuleToModuleByInstance(
                         module, qnn.QuantIdentity,
-                        act_quant=Uint8ActPerTensorFixedPoint,
+                        act_quant=Uint8ActPerTensorFloat,
                         scaling_impl=quant_identity.act_quant.fused_activation_quant_proxy.tensor_quant.scaling_impl,
                         int_scaling_impl=quant_identity.act_quant.fused_activation_quant_proxy.tensor_quant.int_scaling_impl,
                         return_quant_tensor=True)
@@ -263,7 +264,7 @@ def add_input_handler(model, node, quant_identity_name, quant_identity, rewriter
             elif isinstance(module, qnn.flexml.FlexMLQuantSwish):
                 rewriter = ModuleToModuleByInstance(
                     module, qnn.flexml.FlexMLQuantSwish,
-                    act_quant=ShiftedUint8ActPerTensorFixedPoint,
+                    act_quant=ShiftedUint8ActPerTensorFloat,
                     scaling_impl=quant_identity.act_quant.fused_activation_quant_proxy.tensor_quant.scaling_impl,
                     int_scaling_impl=quant_identity.act_quant.fused_activation_quant_proxy.tensor_quant.int_scaling_impl,
                     return_quant_tensor=True)
@@ -288,12 +289,12 @@ def flexml_act_handler(model):
             if isinstance(module, nn.ReLU):
                 rewriter = ModuleToModuleByInstance(
                     module, qnn.QuantReLU,
-                    act_quant=Uint8ActPerTensorFixedPoint, return_quant_tensor=True)
+                    act_quant=Uint8ActPerTensorFloat, return_quant_tensor=True)
                 rewriters.append(rewriter)
             elif isinstance(module, nn.ReLU6):
                 rewriter = ModuleToModuleByInstance(
                     module, qnn.QuantReLU,
-                    act_quant=Uint8ActPerTensorFixedPointMaxInit,
+                    act_quant=Uint8ActPerTensorFloatMaxInit,
                     max_val=6., return_quant_tensor=True)
                 rewriters.append(rewriter)
             elif isinstance(module, nn.LeakyReLU):
@@ -315,9 +316,9 @@ def flexml_act_handler(model):
 
 def _get_quant_module(model, node):
     if are_inputs_unsigned(model, node, []):
-        quant_module = qnn.QuantIdentity(Uint8ActPerTensorFixedPoint, return_quant_tensor=True)
+        quant_module = qnn.QuantIdentity(Uint8ActPerTensorFloat, return_quant_tensor=True)
     else:
-        quant_module = qnn.QuantIdentity(Int8ActPerTensorFixedPoint, return_quant_tensor=True)
+        quant_module = qnn.QuantIdentity(Int8ActPerTensorFloat, return_quant_tensor=True)
     quant_module_name = node.name + '_quant'
     model.add_module(quant_module_name, quant_module)
     return quant_module, quant_module_name
@@ -374,9 +375,10 @@ def flexml_wbiol_handler(model):
                 output_quant_handler(model, node, rewriters, is_sign_preserving=False)
                 rewriter = ModuleToModuleByInstance(
                     module, QUANT_WBIOL_MAP[type(module)],
-                    weight_quant=Int8WeightPerTensorFixedPoint,
+                    weight_quant=Int8WeightPerTensorFloat,
                     weight_narrow_range=False,
-                    bias_quant=Int8BiasPerTensorFloatInternalScaling,
+                    bias_quant=None,
+                    bias_bit_width=16,
                     return_quant_tensor=True)
                 rewriters.append(rewriter)
     for rewriter in rewriters:
@@ -393,7 +395,7 @@ def flexml_avgpool_handler(model, *model_args, avgpool_to_depthwise_conv=False, 
                 output_quant_handler(model, node, rewriters, is_sign_preserving=True)
                 if avgpool_to_depthwise_conv:
                     rewriter = AvgPoolToQuantDepthwiseConv(
-                        weight_quant=Int8WeightPerTensorFixedPoint,
+                        weight_quant=Int8WeightPerTensorFloat,
                         bias_quant=Int8BiasPerTensorFloatInternalScaling,
                         return_quant_tensor=True)
                 else:
@@ -433,8 +435,8 @@ def quantize_flexml(graph_model, *model_args, avgpool_to_depthwise_conv=False, *
     graph_model.eval()
     graph_model = flexml_inp_placeholder_handler(graph_model)
     graph_model = flexml_act_handler(graph_model)
-    graph_model = flexml_add_output_quant_handler(graph_model)
     graph_model = flexml_residual_handler(graph_model)
+    graph_model = flexml_add_output_quant_handler(graph_model)
     graph_model = flexml_wbiol_handler(graph_model)
     graph_model = flexml_avgpool_handler(
         graph_model, *model_args, avgpool_to_depthwise_conv=avgpool_to_depthwise_conv, **model_kwargs)

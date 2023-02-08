@@ -28,6 +28,12 @@ class ShiftedUint8ActPerTensorFixedPoint(ShiftedUint8ActPerTensorFloat):
     restrict_value_float_to_int_impl = CeilSte
 
 
+# class ShiftedUint8ActPerTensorFixedPoint(ShiftedUint8ActPerTensorFloat):
+#     scaling_per_output_channel = False
+#     restrict_scaling_type = RestrictValueType.POWER_OF_TWO
+#     bit_width = 8
+#     restrict_value_float_to_int_impl = CeilSte
+
 class FlexMLQuantLeakyReLU(nn.Module):
 
     def __init__(
@@ -55,7 +61,7 @@ class FlexMLQuantSwish(nn.Module):
 
     def __init__(
             self,
-            output_quant=qnn.QuantIdentity(ShiftedUint8ActPerTensorFixedPoint, return_quant_tensor=True)):
+            output_quant=qnn.QuantIdentity(ShiftedUint8ActPerTensorFloat, return_quant_tensor=True)):
         super(FlexMLQuantSwish, self).__init__()
         self.output_quant = output_quant
 
