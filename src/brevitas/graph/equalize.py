@@ -21,6 +21,8 @@ __all__ = ['EqualizeGraph']
 
 EPSILON = 1e-9
 
+Region = namedtuple('Region', ['srcs', 'sinks'])
+
 _supported_layers = (
     nn.ConvTranspose1d,
     nn.ConvTranspose2d,
@@ -114,6 +116,10 @@ def _get_size(axes: Dict[nn.Module, int]) -> int:
 
 
 def _get_input_axis(module: nn.Module) -> Optional[int]:
+    """
+    Given a sink module, determine the axis associated to the input channels.
+    Return None if not supported.
+    """
     if isinstance(module, (nn.Linear, nn.MultiheadAttention)):
         return 1
     elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
@@ -139,6 +145,10 @@ def _get_input_axis(module: nn.Module) -> Optional[int]:
 
 
 def _get_output_axis(module: nn.Module) -> Optional[int]:
+    """
+    Given a source module, determine the axis associated to the output channels.
+    Return None if not supported.
+    """
     if isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.MultiheadAttention,
                            nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
         return 0
@@ -299,7 +309,7 @@ def _equalize(
     for i in range(iterations):
         scale_factor_max = None
         for region in regions:
-            scale_factors_region = _cross_layer_equalization([name_to_module[n] for n in region[0]], [name_to_module[n] for n in region[1]], merge_bias, bias_shrinkage, scale_computation_type)
+            scale_factors_region = _cross_layer_equalization([name_to_module[n] for n in region.srcs], [name_to_module[n] for n in region.sinks], merge_bias, bias_shrinkage, scale_computation_type)
             scale_factor_region_max = torch.max(torch.abs(1 - scale_factors_region))
             if scale_factor_max is not None:
                 scale_factor_max = torch.max(scale_factor_max, scale_factor_region_max)
@@ -386,9 +396,9 @@ def _extract_regions(graph_model: GraphModule) -> Set[Tuple[str]]:
             if sinks:
                 # each region should appear only once, so to make it hashable
                 # we convert srcs and sinks to ordered lists first, and then to tuples
-                regions.add((tuple(sorted(srcs)), tuple(sorted(sinks))))
+                regions.add(Region(tuple(sorted(srcs)), tuple(sorted(sinks))))
     # for clarity, sort by the of the first source
-    regions = sorted(regions, key=lambda region: region[0][0])
+    regions = sorted(regions, key=lambda region: region.sources[0])
     return regions
 
 
