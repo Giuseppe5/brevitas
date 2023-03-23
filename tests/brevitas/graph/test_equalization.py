@@ -18,7 +18,7 @@ SEED = 123456
 ATOL = 1e-3
 
 
-def equalize(model, regions, merge_bias, bias_shrinkage, scale_computation_type):
+def equalize_test(model, regions, merge_bias, bias_shrinkage, scale_computation_type):
     name_to_module = {}
     name_set = {name for region in regions for module_set in region for name in module_set}
     scale_factors_regions = []
@@ -52,8 +52,9 @@ def test_equalization_torchvision_models(model_dict: dict, merge_bias: bool):
     expected_out = model(inp)
 
     model = symbolic_trace(model)
+
     regions = _extract_regions(model)
-    scale_factor_regions = equalize(model, regions, merge_bias=merge_bias, bias_shrinkage='vaiq', scale_computation_type='maxabs')
+    scale_factor_regions = equalize_test(model, regions, merge_bias=merge_bias, bias_shrinkage='vaiq', scale_computation_type='maxabs')
     shape_scale_regions = [scale.shape for scale in scale_factor_regions]
 
     out = model(inp)
@@ -75,13 +76,53 @@ def test_equalization_torchvision_models(model_dict: dict, merge_bias: bool):
     # Graph equalization can exit in case of shape mismatches or other error without performing any
     # equalization and returning a scalar value. We check that the equalized regions are as many as
     # expected
-    print(sum([shape != () for shape in shape_scale_regions]))
     if 'alexnet' in model_name:
         # In AlexNet, we cannot equalize only through one region
         assert sum([shape == () for shape in shape_scale_regions]) == 1
     else:
         assert all([shape != () for shape in shape_scale_regions])
 
+
+# Test that if we change BN stats, the bias value (which is dependant on them) also changes.
+@pytest_cases.parametrize("model_dict", [(model_name, coverage) for model_name, coverage in MODELS.items()], ids=[ model_name for model_name, _ in MODELS.items()])
+@pytest.mark.parametrize("merge_bias", [True, False])
+def test_equalization_torchvision_models_bn_stats(model_dict: dict, merge_bias: bool):
+    model_name, coverage = model_dict
+
+    if model_name == 'googlenet' and torch_version == version.parse('1.8.1'):
+        pytest.skip('Skip because of PyTorch error = AttributeError: \'function\' object has no attribute \'GoogLeNetOutputs\' ')
+    if 'vit' in model_name and torch_version < version.parse('1.13'):
+        pytest.skip(f'ViT supported from torch version 1.13, current torch version is {torch_version}')
+
+    try:
+        model = getattr(models, model_name)(pretrained=True, transform_input=False)
+    except TypeError:
+        model = getattr(models, model_name)(pretrained=True)
+
+    torch.manual_seed(SEED)
+    model.eval()
+    model = symbolic_trace(model)
+
+    regions = _extract_regions(model)
+    _ = equalize_test(model, regions, merge_bias=merge_bias, bias_shrinkage='vaiq', scale_computation_type='maxabs')
+
+    pre_bn_stats = []
+    for _, modules in model.named_modules():
+        # if isinstance(modules,(nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+        if hasattr(modules, 'orig_bias'):
+            modules.train()
+            pre_bn_stats.append(modules.bias.data.clone())
+
+    for _ in range(100):
+        model(torch.randn(IN_SIZE_CONV))
+
+    post_bn_stats = []
+    for _, modules in model.named_modules():
+        if hasattr(modules, 'orig_bias'):
+            post_bn_stats.append(modules.bias.data.clone())
+
+    for pre_val, post_val in zip(pre_bn_stats, post_bn_stats):
+        assert not torch.allclose(pre_val, post_val, atol=ATOL)
 
 @pytest.mark.parametrize("merge_bias", [True, False])
 def test_models(toy_model, merge_bias, request):
@@ -100,7 +141,7 @@ def test_models(toy_model, merge_bias, request):
     expected_out = model(inp)
     model = symbolic_trace(model)
     regions = _extract_regions(model)
-    scale_factor_regions = equalize(model, regions, merge_bias=merge_bias, bias_shrinkage='vaiq', scale_computation_type='maxabs')
+    scale_factor_regions = equalize_test(model, regions, merge_bias=merge_bias, bias_shrinkage='vaiq', scale_computation_type='maxabs')
     shape_scale_regions = [scale.shape for scale in scale_factor_regions]
 
     out = model(inp)
