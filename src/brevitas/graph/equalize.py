@@ -14,6 +14,7 @@ import torch.nn as nn
 from brevitas.fx import GraphModule
 from brevitas.fx import Node
 from brevitas.graph.utils import get_module
+from brevitas.graph.utils import replace_module
 
 from .base import GraphTransform
 
@@ -87,6 +88,24 @@ _batch_norm = (
 WeightBiasTuple = namedtuple('WeightBiasTuple', ['weight', 'bias'], defaults=[None])
 
 
+def _equalize_bn(bn_module: nn.Module, scaling_factors: torch.Tensor):
+    class_name = bn_module.__class__.__name__ + 'Equalized'
+    bn_module.register_parameter('orig_bias', torch.nn.Parameter(bn_module.bias.clone().detach()))
+    bn_module.register_parameter('orig_weight', torch.nn.Parameter(bn_module.weight.clone().detach()))
+    bn_module.scaling_factors = scaling_factors.clone()
+    bn_module.inverse_scaling_factor = torch.ones_like(bn_module.orig_bias)
+
+    del bn_module.bias
+    def new_bias(self):
+        return self.inverse_scaling_factor * \
+        (self.running_mean.data * self.orig_weight / torch.sqrt(self.running_var + self.eps)\
+        * (self.scaling_factors - 1) + self.orig_bias)
+
+    var = {'bias': property(new_bias)}
+    child_class = type(class_name, (bn_module.__class__,), var)
+    bn_module.__class__ = child_class
+
+
 def _select_scale_computation_fn(scale_computation_type: str) -> Callable[[torch.Tensor], torch.Tensor]:
     if scale_computation_type == 'maxabs':
         return _channel_maxabs
@@ -131,7 +150,7 @@ def _get_input_axis(module: nn.Module) -> Optional[int]:
     """
     if isinstance(module, (nn.Linear, nn.MultiheadAttention)):
         return 1
-    elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+    elif isinstance(module, _batch_norm):
         return 0
     elif isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
         if module.groups == 1:
@@ -275,17 +294,25 @@ def _cross_layer_equalization(srcs: List[nn.Module], sinks: List[nn.Module], mer
 
     for module, axis in src_axes.items():
         if hasattr(module, 'bias') and module.bias is not None:
-            module.bias.data = module.bias.data * inverse_scaling_factors.view_as(module.bias)
+            if hasattr(module, 'orig_bias'):
+                module.inverse_scaling_factor = inverse_scaling_factors.view_as(module.bias)
+            else:
+                module.bias.data = module.bias.data * inverse_scaling_factors.view_as(module.bias)
         src_broadcast_size = [1] * module.weight.ndim
         src_broadcast_size[axis] = module.weight.size(axis)
         module.weight.data = module.weight.data * torch.reshape(inverse_scaling_factors, src_broadcast_size)
     for module, axis in sink_axes.items():
         src_broadcast_size = [1] * module.weight.ndim
         src_broadcast_size[axis] = module.weight.size(axis)
-        if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
-            additive_factor = module.running_mean.data * module.weight.data / torch.sqrt(module.running_var.data + module.eps)
-            module.bias.data = module.bias.data + additive_factor * (scaling_factors - 1)
+        if isinstance(module, _batch_norm):
+            # If it is BatchNorm, we need to define a new metaclass where the bias is a function of
+            # running_mean and running_var, as well as function of the pre-equalized weight and bias.
+            # If the stats are updated, the bias value will change accordingly.
+            # If a new training is performed, the weight and the pre-equalized bias and weight will
+            # be learned.
+            _equalize_bn(module, scaling_factors)
         module.weight.data = module.weight.data * torch.reshape(scaling_factors, src_broadcast_size)
+
     return scaling_factors
 
 def _equalize(model: GraphModule, regions: Set[Tuple[str]], iterations: int, threshold: float, merge_bias: bool, bias_shrinkage: Union[str, float], scale_computation_type: str) -> GraphModule:
@@ -381,8 +408,6 @@ def _extract_regions(graph_model: GraphModule) -> Set[Tuple[str]]:
                 # each region should appear only once, so to make it hashable
                 # we convert srcs and sinks to ordered lists first, and then to tuples
                 regions.add(Region(tuple(sorted(srcs)), tuple(sorted(sinks))))
-    # for clarity, sort by the of the first source
-    regions = sorted(regions, key=lambda region: region.sources[0])
     return regions
 
 
