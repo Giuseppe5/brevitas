@@ -14,7 +14,7 @@ import torch.nn as nn
 from brevitas.fx import GraphModule
 from brevitas.fx import Node
 from brevitas.graph.utils import get_module
-from brevitas.graph.utils import replace_module
+from brevitas.nn.quant_bn import _equalize_bn
 
 from .base import GraphTransform
 
@@ -86,24 +86,6 @@ _batch_norm = (
 
 
 WeightBiasTuple = namedtuple('WeightBiasTuple', ['weight', 'bias'], defaults=[None])
-
-
-def _equalize_bn(bn_module: nn.Module, scaling_factors: torch.Tensor):
-    class_name = bn_module.__class__.__name__ + 'Equalized'
-    bn_module.register_parameter('orig_bias', torch.nn.Parameter(bn_module.bias.clone().detach()))
-    bn_module.register_parameter('orig_weight', torch.nn.Parameter(bn_module.weight.clone().detach()))
-    bn_module.scaling_factors = scaling_factors.clone()
-    bn_module.inverse_scaling_factor = torch.ones_like(bn_module.orig_bias)
-
-    del bn_module.bias
-    def new_bias(self):
-        return self.inverse_scaling_factor * \
-        (self.running_mean.data * self.orig_weight / torch.sqrt(self.running_var + self.eps)\
-        * (self.scaling_factors - 1) + self.orig_bias)
-
-    var = {'bias': property(new_bias)}
-    child_class = type(class_name, (bn_module.__class__,), var)
-    bn_module.__class__ = child_class
 
 
 def _select_scale_computation_fn(scale_computation_type: str) -> Callable[[torch.Tensor], torch.Tensor]:
@@ -295,7 +277,7 @@ def _cross_layer_equalization(srcs: List[nn.Module], sinks: List[nn.Module], mer
     for module, axis in src_axes.items():
         if hasattr(module, 'bias') and module.bias is not None:
             if hasattr(module, 'orig_bias'):
-                module.inverse_scaling_factor = inverse_scaling_factors.view_as(module.bias)
+                module.inverse_scaling_factors = inverse_scaling_factors.view_as(module.bias)
             else:
                 module.bias.data = module.bias.data * inverse_scaling_factors.view_as(module.bias)
         src_broadcast_size = [1] * module.weight.ndim

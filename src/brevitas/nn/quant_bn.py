@@ -5,6 +5,8 @@
 from abc import ABC
 from typing import Optional
 
+import torch
+
 import brevitas.config as config
 from brevitas.inject.defaults import Int8WeightPerTensorFloat
 
@@ -96,3 +98,46 @@ class BatchNorm2dToQuantScaleBias(_BatchNormToQuantScaleBias):
             return_quant_tensor=return_quant_tensor,
             **kwargs)
         self.eps = eps
+
+
+def _equalize_bn(bn_module: torch.nn.Module, scaling_factors: torch.Tensor):
+    class_name = bn_module.__class__.__name__ + 'Equalized'
+    bn_module.register_parameter('orig_bias', torch.nn.Parameter(bn_module.bias.clone().detach()))
+    bn_module.register_parameter('orig_weight', torch.nn.Parameter(bn_module.weight.clone().detach()))
+    bn_module.register_buffer('scaling_factors',  scaling_factors.clone().detach())
+    bn_module.register_buffer('inverse_scaling_factors', torch.ones_like(bn_module.orig_bias))
+
+
+    del bn_module.bias
+    def new_bias(self):
+        return self.inverse_scaling_factors * \
+        (self.running_mean.data * self.orig_weight / torch.sqrt(self.running_var + self.eps) \
+        * (self.scaling_factors - 1) + self.orig_bias)
+
+    def state_dict(self, destination=None, prefix='', keep_vars=False):
+        output_dict = super(self.__class__, self).state_dict(
+            destination=destination, prefix=prefix, keep_vars=keep_vars)
+        output_dict[prefix + 'bias'] = self.bias
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+
+
+        equalized_bn_key = prefix + 'orig_weight'
+        is_equalized_bn = equalized_bn_key in state_dict
+        if not is_equalized_bn:
+            self.scaling_factors.fill_(1.)
+            self.inverse_scaling_factors.fill_(1.)
+            state_dict[prefix + 'orig_bias'] = state_dict[prefix + 'bias']
+            state_dict[prefix + 'orig_weight'] = state_dict[prefix + 'weight']
+        super(self.__class__, self)._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+        if not is_equalized_bn:
+            missing_keys.remove(prefix + 'scaling_factors')
+            missing_keys.remove(prefix + 'inverse_scaling_factors')
+        unexpected_keys.remove(prefix + 'bias')
+    var = {'bias': property(new_bias),
+           'state_dict': state_dict,
+           '_load_from_state_dict': _load_from_state_dict}
+    child_class = type(class_name, (bn_module.__class__,), var)
+    bn_module.__class__ = child_class
