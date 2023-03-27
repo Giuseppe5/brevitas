@@ -7,8 +7,13 @@ import pytest_cases
 from pytest_cases import fixture_union
 import torch
 import torch.nn as nn
+from torchvision import models
 
 from brevitas import torch_version
+from brevitas.graph.equalize import _cross_layer_equalization
+
+SEED = 123456
+ATOL = 1e-3
 
 MODELS = {
     'vit_b_32': [0.396, 0.396],
@@ -16,12 +21,46 @@ MODELS = {
     'mobilenet_v2': [0.6571, 0.6571],
     'resnet18': [0.9756, 0.9756],
     'googlenet': [0.4956, 0.4956],
-    'inception_v3': [0.4973, 0.4973],
+    'inception_v3': [0.4948, 0.4948],
     'alexnet': [0.875, 0.875],
 }
 
 IN_SIZE_CONV = (1, 3, 224, 224)
 IN_SIZE_LINEAR = (1, 224, 3)
+
+
+def equalize_test(model, regions, merge_bias, bias_shrinkage, scale_computation_type):
+    name_to_module = {}
+    name_set = {name for region in regions for module_set in region for name in module_set}
+    scale_factors_regions = []
+    for name, module in model.named_modules():
+        if name in name_set:
+            name_to_module[name] = module
+    for region in regions:
+        scale_factors_region = _cross_layer_equalization([name_to_module[n] for n in region[0]], [name_to_module[n] for n in region[1]], merge_bias, bias_shrinkage, scale_computation_type)
+        scale_factors_regions.append(scale_factors_region)
+    return scale_factors_regions
+
+
+@pytest_cases.fixture
+@pytest_cases.parametrize("model_dict", [(model_name, coverage) for model_name, coverage in MODELS.items()], ids=[ model_name for model_name, _ in MODELS.items()])
+def model_coverage(model_dict: dict):
+    model_name, coverage = model_dict
+
+    if model_name == 'googlenet' and torch_version == version.parse('1.8.1'):
+        pytest.skip('Skip because of PyTorch error = AttributeError: \'function\' object has no attribute \'GoogLeNetOutputs\' ')
+    if 'vit' in model_name and torch_version < version.parse('1.13'):
+        pytest.skip(f'ViT supported from torch version 1.13, current torch version is {torch_version}')
+
+    kwargs = dict()
+    if model_name in ('inception_v3', 'googlenet'):
+        kwargs['transform_input'] = False
+        # if model_name == 'inception_v3':
+        #     kwargs['aux_logits'] = False
+        # model = getattr(models, model_name)(pretrained=True, transform_input=False)
+    model = getattr(models, model_name)(pretrained=True, **kwargs)
+
+    return model, coverage
 
 @pytest_cases.fixture
 def bnconv_model():
