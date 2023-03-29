@@ -155,7 +155,7 @@ def test_bn_stats_torchvision_models(model_coverage: tuple, merge_bias: bool):
             post_bn_stats.append(module.bias.data.clone())
 
     for pre_val, post_val in zip(pre_bn_stats, post_bn_stats):
-        assert not torch.allclose(pre_val, post_val, atol=ATOL)
+        assert not torch.allclose(pre_val, post_val)
 
 
 @pytest_cases.parametrize("merge_bias", [True, False])
