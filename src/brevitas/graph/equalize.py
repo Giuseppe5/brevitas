@@ -1,7 +1,6 @@
 # Copyright (C) 2023, Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
-
 from collections import namedtuple
 from copy import deepcopy
 from functools import partial
@@ -14,7 +13,6 @@ import torch.nn as nn
 from brevitas.fx import GraphModule
 from brevitas.fx import Node
 from brevitas.graph.utils import get_module
-from brevitas.graph.utils import replace_module
 
 from .base import GraphTransform
 
@@ -53,49 +51,66 @@ _scale_invariant_layers = (
     nn.AdaptiveAvgPool2d,
     nn.AdaptiveAvgPool3d)
 
-_scale_invariant_op = (
-    torch.mul,
-    operator.mul,
-    operator.imul,
-    operator.__mul__,
-    operator.__imul__)
+_scale_invariant_op = (torch.mul, operator.mul, operator.imul, operator.__mul__, operator.__imul__)
 
-_select_op = (
-    operator.getitem,
-    operator.__getitem__)
+_select_op = (operator.getitem, operator.__getitem__)
 
 _residual_methods = ('add', 'add_')
 
 _residual_fns = (torch.add, operator.add, operator.iadd, operator.__add__, operator.__iadd__)
 
-_batch_norm = (
-    nn.BatchNorm1d,
-    nn.BatchNorm2d,
-    nn.BatchNorm3d)
-
+_batch_norm = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)
 
 WeightBiasTuple = namedtuple('WeightBiasTuple', ['weight', 'bias'], defaults=[None])
 
 
 def _equalize_bn(bn_module: nn.Module, scaling_factors: torch.Tensor):
     class_name = bn_module.__class__.__name__ + 'Equalized'
-    bn_module.register_parameter('orig_bias', torch.nn.Parameter(bn_module.bias.clone().detach()))
-    bn_module.register_parameter('orig_weight', torch.nn.Parameter(bn_module.weight.clone().detach()))
-    bn_module.scaling_factors = scaling_factors.clone()
-    bn_module.inverse_scaling_factor = torch.ones_like(bn_module.orig_bias)
+    bn_module.register_parameter('orig_bias', nn.Parameter(bn_module.bias.clone().detach()))
+    bn_module.register_parameter('orig_weight', nn.Parameter(bn_module.weight.clone().detach()))
+    bn_module.register_buffer('scaling_factors', scaling_factors.clone().detach())
+    bn_module.register_buffer('inverse_scaling_factors', torch.ones_like(bn_module.orig_bias))
 
     del bn_module.bias
+
     def new_bias(self):
-        return self.inverse_scaling_factor * \
-        (self.running_mean.data * self.orig_weight / torch.sqrt(self.running_var + self.eps)\
+        return self.inverse_scaling_factors * \
+        (self.running_mean.data * self.orig_weight / torch.sqrt(self.running_var + self.eps) \
         * (self.scaling_factors - 1) + self.orig_bias)
 
-    var = {'bias': property(new_bias)}
+    def state_dict(self, destination=None, prefix='', keep_vars=False):
+        output_dict = super(self.__class__, self).state_dict(
+            destination=destination, prefix=prefix, keep_vars=keep_vars)
+        output_dict[prefix + 'bias'] = self.bias
+
+    def _load_from_state_dict(
+            self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
+            error_msgs):
+
+        equalized_bn_key = prefix + 'orig_weight'
+        is_equalized_bn = equalized_bn_key in state_dict
+        if not is_equalized_bn:
+            self.scaling_factors.fill_(1.)
+            self.inverse_scaling_factors.fill_(1.)
+            state_dict[prefix + 'orig_bias'] = state_dict[prefix + 'bias']
+            state_dict[prefix + 'orig_weight'] = state_dict[prefix + 'weight']
+        super(self.__class__, self)._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+        if not is_equalized_bn:
+            missing_keys.remove(prefix + 'scaling_factors')
+            missing_keys.remove(prefix + 'inverse_scaling_factors')
+        unexpected_keys.remove(prefix + 'bias')
+
+    var = {
+        'bias': property(new_bias),
+        'state_dict': state_dict,
+        '_load_from_state_dict': _load_from_state_dict}
     child_class = type(class_name, (bn_module.__class__,), var)
     bn_module.__class__ = child_class
 
 
-def _select_scale_computation_fn(scale_computation_type: str) -> Callable[[torch.Tensor], torch.Tensor]:
+def _select_scale_computation_fn(
+        scale_computation_type: str) -> Callable[[torch.Tensor], torch.Tensor]:
     if scale_computation_type == 'maxabs':
         return _channel_maxabs
     elif scale_computation_type == 'range':
@@ -166,8 +181,15 @@ def _get_output_axis(module: nn.Module) -> Optional[int]:
     Given a source module, determine the axis associated to the output channels.
     Return None if not supported.
     """
-    if isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.MultiheadAttention,
-                           nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+    if isinstance(module,
+                  (nn.Linear,
+                   nn.Conv1d,
+                   nn.Conv2d,
+                   nn.Conv3d,
+                   nn.MultiheadAttention,
+                   nn.BatchNorm1d,
+                   nn.BatchNorm2d,
+                   nn.BatchNorm3d)):
         return 0
     elif isinstance(module, (nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d)):
         return 1
@@ -180,7 +202,10 @@ def _get_output_axis(module: nn.Module) -> Optional[int]:
     else:
         return None
 
-def _combine_weights_bias(weight: torch.Tensor, bias_shrinkage: Union[float, str], bias: Optional[torch.Tensor]) -> torch.Tensor:
+
+def _combine_weights_bias(
+        weight: torch.Tensor, bias_shrinkage: Union[float, str],
+        bias: Optional[torch.Tensor]) -> torch.Tensor:
     """Combine weights and bias before graph equalizattion
     This method merges the weight and bias of the sources, so that the resulting equalizer scale factor
     is influenced also by the magnitude of the bias, mitigated by a shrink factor.
@@ -291,7 +316,9 @@ def _cross_layer_equalization(
     for module, axis in src_axes.items():
         if hasattr(module, 'bias') and module.bias is not None:
             if hasattr(module, 'orig_bias'):
-                module.inverse_scaling_factor = inverse_scaling_factors.view_as(module.bias)
+                # If this is a Equalized BN, we update the inverse_scaling_factors
+                module.inverse_scaling_factors = module.inverse_scaling_factors * inverse_scaling_factors.view_as(
+                    module.bias)
             else:
                 module.bias.data = module.bias.data * inverse_scaling_factors.view_as(module.bias)
         src_broadcast_size = [1] * module.weight.ndim
@@ -333,7 +360,11 @@ def _equalize(
     for i in range(iterations):
         scale_factor_max = None
         for region in regions:
-            scale_factors_region = _cross_layer_equalization([name_to_module[n] for n in region.srcs], [name_to_module[n] for n in region.sinks], merge_bias, bias_shrinkage, scale_computation_type)
+            scale_factors_region = _cross_layer_equalization(
+                [name_to_module[n] for n in region.srcs], [name_to_module[n] for n in region.sinks],
+                merge_bias,
+                bias_shrinkage,
+                scale_computation_type)
             scale_factor_region_max = torch.max(torch.abs(1 - scale_factors_region))
             if scale_factor_max is not None:
                 scale_factor_max = torch.max(scale_factor_max, scale_factor_region_max)
@@ -426,8 +457,14 @@ def _extract_regions(graph_model: GraphModule) -> Set[Tuple[str]]:
 
 class EqualizeGraph(GraphTransform):
 
-    def __init__(self, iterations: int = 10, threshold: float = 0.05, return_regions: bool = False,
-                 merge_bias: bool = True, bias_shrinkage: Union[float, str] = 'vaiq', scale_computation_type: str = 'maxabs') -> None:
+    def __init__(
+            self,
+            iterations: int = 10,
+            threshold: float = 0.05,
+            return_regions: bool = False,
+            merge_bias: bool = True,
+            bias_shrinkage: Union[float, str] = 'vaiq',
+            scale_computation_type: str = 'maxabs') -> None:
         super(EqualizeGraph, self).__init__()
         self.iterations = iterations
         self.return_regions = return_regions
@@ -440,8 +477,14 @@ class EqualizeGraph(GraphTransform):
               graph_model: GraphModule) -> Union[Tuple[GraphModule, Set[Tuple[str]]], GraphModule]:
         regions = _extract_regions(graph_model)
         if len(regions) > 0:
-            graph_model = _equalize(graph_model, regions, self.iterations, self.threshold,
-                                    self.merge_bias, self.bias_shrinkage, self.scale_computation_type)
+            graph_model = _equalize(
+                graph_model,
+                regions,
+                self.iterations,
+                self.threshold,
+                self.merge_bias,
+                self.bias_shrinkage,
+                self.scale_computation_type)
         if self.return_regions:
             return graph_model, regions
         else:
