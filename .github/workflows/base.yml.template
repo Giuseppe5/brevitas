@@ -5,9 +5,10 @@ on:
     branches: [ master, dev ]
   issue_comment:
     types: [created, edited, deleted]
-  pull_request:
+
 
 jobs:
+  if: contains(github.event.comment.html_url, '/pull/')
   build:
     runs-on: ${{ matrix.platform }}
     strategy:
