@@ -31,7 +31,7 @@ jobs:
 
 
 
-    if: contains(github.event.comment.body, '/run_tests') && contains(github.event.comment.html_url, '/pull/')
+    if: contains(github.event.comment.body, '/run_tests')
     steps:
 
     - name: Checkout repo
