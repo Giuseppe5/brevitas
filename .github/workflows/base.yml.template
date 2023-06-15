@@ -1,22 +1,20 @@
-name: &{name}
+name: %{name}
 
 on:
-  push:
-    branches: [ master, dev ]
-  pull_request:
-    types:
-      - review_requested
+  issue_comment:
+    types: [created, edited, deleted]
+
 
 jobs:
   build:
     runs-on: ${{ matrix.platform }}
     strategy:
-&{strategy}
+%{strategy}
       matrix:
-&{matrix}
-&{exclude}
+%{matrix}
+%{exclude}
 
-    if: ${{ !github.event.pull_request.draft }}
+    if: contains(github.event.comment.body, '/run_tests')
     steps:
 
     - name: Checkout repo
@@ -41,4 +39,4 @@ jobs:
       run: brew install libomp
       if: startsWith(runner.os, 'macOS') == true
 
-&{steps}
+%{steps}

@@ -1,69 +1,19 @@
-name: Pytest
-
 on:
-  push:
-    branches: [ master, dev ]
   pull_request:
-    types:
-      - review_requested
-
+    types: [opened]
+  issue_comment:
+    types: [created]
+    
 jobs:
-  build:
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-
-
-      matrix:
-        python_version: ['3.7', '3.8']
-        pytorch_version: ['1.5.1', '1.6.0', '1.7.1', '1.8.1', '1.9.1', '1.10.1', '1.11.0', '1.12.1', '1.13.0']
-        platform: ['windows-latest', 'ubuntu-latest', 'macos-latest']
-        jit_status: ['jit_disabled', 'jit_enabled']
-
-
-        exclude:
-          - pytorch_version: '1.5.1'
-            jit_status: 'jit_enabled'
-
-          - pytorch_version: '1.6.0'
-            jit_status: 'jit_enabled'
-
-          - pytorch_version: '1.7.1'
-            jit_status: 'jit_enabled'
-
-          - pytorch_version: '1.8.1'
-            jit_status: 'jit_enabled'
-
-          - pytorch_version: '1.9.1'
-            jit_status: 'jit_enabled'
-
-
-
-    if: ${{ !github.event.pull_request.draft }}
+  deploy:
+    runs-on: ubuntu-latest
     steps:
-
-    - name: Checkout repo
-      uses: actions/checkout@v2
-
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-       python-version: ${{ matrix.python_version }}
-
-    - name: Install Nox dependencies
-      shell: bash
-      run: pip install -r requirements/requirements-nox.txt
-
-    - name: Install libsndfile and libgomp1 on Ubuntu
-      shell: bash
-      run: sudo apt-get install -y libsndfile-dev libgomp1
-      if: startsWith(runner.os, 'Linux') == true
-
-    - name: Install libomp on macOS
-      shell: bash
-      run: brew install libomp
-      if: startsWith(runner.os, 'macOS') == true
-
-    - name: Run Nox session for brevitas pytest
-      shell: bash
-      run: nox -v -s tests_brevitas_cpu-${{ matrix.python_version }}\(${{ matrix.jit_status }}\,\ pytorch_${{ matrix.pytorch_version }}\)
+      - uses: khan/pull-request-comment-trigger@v1.1.0
+        id: check
+        with:
+          trigger: '/run_tests'
+          reaction: rocket
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+      - run: 'echo Found it!'
+        if: steps.check.outputs.triggered == 'true'

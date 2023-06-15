@@ -1,11 +1,9 @@
 name: Test Brevitas-FINN integration
 
 on:
-  push:
-    branches: [ master, dev ]
-  pull_request:
-    types:
-      - review_requested
+  issue_comment:
+    types: [created, edited, deleted]
+
 
 jobs:
   build:
@@ -22,7 +20,7 @@ jobs:
 
 
 
-    if: ${{ !github.event.pull_request.draft }}
+    if: contains(github.event.comment.body, '/run_tests')
     steps:
 
     - name: Checkout repo
