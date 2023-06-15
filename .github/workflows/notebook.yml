@@ -8,7 +8,6 @@ on:
 
 
 jobs:
-  if: contains(github.event.comment.html_url, '/pull/')
   build:
     runs-on: ${{ matrix.platform }}
     strategy:
@@ -32,7 +31,7 @@ jobs:
 
 
 
-    if: contains(github.event.comment.body, '/run_tests')
+    if: contains(github.event.comment.body, '/run_tests') && contains(github.event.comment.html_url, '/pull/')
     steps:
 
     - name: Checkout repo
