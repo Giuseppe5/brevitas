@@ -1,8 +1,6 @@
 name: Test develop install
 
 on:
-  push:
-    branches: [ master, dev ]
   issue_comment:
     types: [created, edited, deleted]
 
