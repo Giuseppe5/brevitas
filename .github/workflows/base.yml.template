@@ -1,8 +1,6 @@
 name: %{name}
 
 on:
-  push:
-    branches: [ master, dev ]
   issue_comment:
     types: [created, edited, deleted]
 
