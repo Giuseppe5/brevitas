@@ -27,6 +27,7 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 from tqdm import tqdm
 
 from brevitas.core.stats.stats_op import NegativeMinOrZero
+from brevitas.export.inference.manager import quant_inference_mode
 from brevitas.export.onnx.standard.qcdq.manager import StdQCDQONNXManager
 from brevitas.graph.base import ModuleToModuleByClass
 from brevitas.graph.calibrate import bias_correction_mode
@@ -247,7 +248,7 @@ def main(args):
                 else:
                     non_blacklist[name_to_add] += 1
     print(f"Blacklisted layers: {set(blacklist)}")
-    print(f"Non blacklisted layers: {set(non_blacklist.keys())}")
+    print(f"Non blacklisted layers: {set(x.split('.')[-1] for x in non_blacklist.keys())}")
 
     # Make sure there all LoRA layers are fused first, otherwise raise an error
     for m in pipe.unet.modules():
@@ -578,15 +579,28 @@ def main(args):
     if args.prompt > 0 and not args.dry_run:
         # with brevitas_proxy_inference_mode(pipe.unet):
         if args.use_mlperf_inference:
-            print(f"Computing accuracy with MLPerf pipeline")
-            compute_mlperf_fid(
-                args.model,
-                args.path_to_coco,
-                pipe,
-                args.prompt,
-                output_dir,
-                args.device,
-                not args.vae_fp16_fix)
+            with torch.no_grad(), quant_inference_mode(pipe.unet):
+                run_val_inference(
+                    pipe,
+                    args.resolution,
+                    [calibration_prompts[0]],
+                    test_seeds,
+                    args.device,
+                    dtype,
+                    total_steps=args.calibration_steps,
+                    use_negative_prompts=args.use_negative_prompts,
+                    test_latents=latents,
+                    guidance_scale=args.guidance_scale)
+                pipe.unet = torch.compile(pipe.unet)
+                print(f"Computing accuracy with MLPerf pipeline")
+                compute_mlperf_fid(
+                    args.model,
+                    args.path_to_coco,
+                    pipe,
+                    args.prompt,
+                    output_dir,
+                    args.device,
+                    not args.vae_fp16_fix)
         else:
             print(f"Computing accuracy on default prompt")
             testing_prompts = TESTING_PROMPTS[:args.prompt]
