@@ -38,7 +38,7 @@ def handle_quant_param(layer, layer_dict):
 
         layer_dict['output_scale'] = output_scale.numpy().tolist()
         layer_dict['output_scale_shape'] = output_scale.shape
-    layer_dict['input_scale'] = input_scale.numpy().tolist()
+    layer_dict['input_scale'] = input_scale.cpu().numpy().tolist()
     layer_dict['input_scale_shape'] = input_scale.shape
     layer_dict['input_zp'] = input_zp.to(torch.float32).cpu().numpy().tolist()
     layer_dict['input_zp_shape'] = input_zp.shape
