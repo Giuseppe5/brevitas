@@ -209,8 +209,7 @@ class ParameterFromStatsFromParameterScaling(brevitas.jit.ScriptModule):
         self.value = Parameter(torch.full(scaling_shape, 1.0, dtype=dtype, device=device))
 
     @brevitas.jit.script_method
-    def forward(
-            self, x: torch.Tensor, threshold: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, threshold: Optional[torch.Tensor] = None) -> torch.Tensor:
         if threshold is None:
             threshold = torch.ones(1).type_as(x)
         # Threshold division must happen after we update self.value, but before we apply restrict_preproces
