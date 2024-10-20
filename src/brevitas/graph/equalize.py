@@ -18,15 +18,23 @@ from brevitas.fx import GraphModule
 from brevitas.fx import Node
 from brevitas.graph.base import GraphTransform
 from brevitas.graph.base import ModuleInstanceToModuleInstance
-from brevitas.graph.hadamard import get_hadK, matmul_hadU, matmul_hadU_cuda
+from brevitas.graph.hadamard import get_hadK
+from brevitas.graph.hadamard import matmul_hadU
+from brevitas.graph.hadamard import matmul_hadU_cuda
 from brevitas.graph.utils import get_module
 from brevitas.graph.utils import get_node
-from brevitas.nn.equalized_layer import EqualizedModule, RotatedModule
+from brevitas.nn.equalized_layer import EqualizedModule
 from brevitas.nn.equalized_layer import INPUT_NAMES
+from brevitas.nn.equalized_layer import RotatedModule
 from brevitas.nn.quant_scale_bias import ScaleBias
 from brevitas.utils.torch_utils import KwargsForwardHook
 
 from .base import InsertModuleCallAfter
+
+try:
+    import fast_hadamard_transform
+except:
+    fast_hadamard_transform = None
 
 __all__ = ['GraphActivationEqualization', 'LayerwiseActivationEqualization', 'EqualizeGraph']
 
@@ -86,7 +94,9 @@ _batch_norm = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)
 
 _ignore_ops = (getattr, 'size')
 
-def _is_supported_module(graph_model: GraphModule, node: Node, supported_layers: Set =_supported_layers) -> bool:
+
+def _is_supported_module(
+        graph_model: GraphModule, node: Node, supported_layers: Set = _supported_layers) -> bool:
     if node.op == 'call_module':
         module = get_module(graph_model, node.target)
         if isinstance(module, supported_layers):
@@ -101,9 +111,14 @@ def _is_supported_module(graph_model: GraphModule, node: Node, supported_layers:
             return True
     return False
 
-def _is_scale_invariant_module(graph_model: GraphModule, node: Node, scale_invariant_layers=_scale_invariant_layers) -> bool:
+
+def _is_scale_invariant_module(
+        graph_model: GraphModule,
+        node: Node,
+        scale_invariant_layers=_scale_invariant_layers) -> bool:
     return node.op == 'call_module' and isinstance(
         get_module(graph_model, node.target), scale_invariant_layers)
+
 
 # Start and End identify the starting and ending channels of the weight matrix that need to be
 # equalized.
@@ -122,6 +137,7 @@ class EqualizationIndexes:
 class WeightBiasWrapper:
     weight: torch.Tensor = None
     bias: torch.Tensor = None
+
 
 # Required for being hashable
 @dataclass(eq=True, frozen=True)
@@ -149,7 +165,7 @@ class Region:
     def get_module_from_name(self, name: str) -> nn.Module:
         name = name.split("$")[0]
         return self.name_to_module[name]
-    
+
     @property
     def max_shape_srcs(self):
         max_shape_srcs = 0
@@ -167,6 +183,7 @@ class Region:
     @property
     def is_valid(self):
         return self.max_shape_srcs == self.max_shape_sinks
+
 
 @dataclass
 class WalkRegionState:
@@ -342,7 +359,8 @@ def _get_output_axis(module: nn.Module) -> Optional[int]:
                    nn.BatchNorm2d,
                    nn.BatchNorm3d)):
         return 0
-    elif isinstance(module, (nn.Embedding, nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d)):
+    elif isinstance(module,
+                    (nn.Embedding, nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d)):
         return 1
     elif isinstance(module, (nn.LayerNorm, nn.RMSNorm)):
         # We assume normalization happens only along the channel dimension
@@ -460,7 +478,6 @@ def _cross_layer_equalization(
     act_sources_axes = {}
     single_module = region.get_module_from_name(next(iter(region.sinks_names)))
     dtype = next(single_module.parameters()).dtype
-
 
     src_axes = {}
     for name, indexes in region.srcs.items():
@@ -670,14 +687,15 @@ def _equalize(
     return model
 
 
-
 def _is_scale_varying_activation(graph_model, node):
     return node.op == 'call_module' and isinstance(
         get_module(graph_model, node.target), _scale_varying_activations)
 
 
-def _is_scale_invariant_function(node: Node, scale_invariant_op: Set =_scale_invariant_op) -> bool:
-    out = node.op in ('call_function', 'call_method') and node.target in scale_invariant_op + _select_op + _reshaping_op
+def _is_scale_invariant_function(node: Node, scale_invariant_op: Set = _scale_invariant_op) -> bool:
+    out = node.op in (
+        'call_function',
+        'call_method') and node.target in scale_invariant_op + _select_op + _reshaping_op
     if node.target == torch.nn.functional.interpolate:
         out &= node.kwargs.get('mode', None) == 'nearest'
     return out
@@ -727,7 +745,9 @@ def find_srcs_channel_dim(state, model, inp_node):
         for n in inp_node.all_input_nodes:
             total_channels += find_srcs_channel_dim(state, model, n)
         return total_channels
-    elif _is_scale_invariant_module(model, inp_node, state.scale_invariant_layers) or _is_scale_invariant_function(inp_node, state.scale_invariant_function):
+    elif _is_scale_invariant_module(model, inp_node,
+                                    state.scale_invariant_layers) or _is_scale_invariant_function(
+                                        inp_node, state.scale_invariant_function):
         return find_srcs_channel_dim(state, model, inp_node.all_input_nodes[0])
     else:
         return _UNSUPPORTED_OP
@@ -781,7 +801,8 @@ def find_srcs(graph_model: GraphModule, starting_node: Node,
             state.offset = state.offset if not state.update_offset else state.offset + weight.shape[
                 0]
         elif _is_scale_invariant_module(
-                graph_model, node, state.scale_invariant_layers) or _is_scale_invariant_function(node, state.scale_invariant_function):
+                graph_model, node, state.scale_invariant_layers) or _is_scale_invariant_function(
+                    node, state.scale_invariant_function):
             find_sinks(graph_model, node, state)
             find_srcs(graph_model, node, state)
         elif (node.op == 'call_method' and node.target in _residual_methods or
@@ -828,7 +849,8 @@ def find_sinks(graph_model: GraphModule, starting_node: Node,
             state.add_sinks(node.target, module, eq_indexes)
 
         elif _is_scale_invariant_module(
-                graph_model, node, state.scale_invariant_layers) or _is_scale_invariant_function(node, state.scale_invariant_function):
+                graph_model, node, state.scale_invariant_layers) or _is_scale_invariant_function(
+                    node, state.scale_invariant_function):
             find_sinks(graph_model, node, state)
         elif (node.op == 'call_method' and node.target in _residual_methods or
               node.op == 'call_function' and node.target in _residual_fns):
@@ -878,16 +900,15 @@ def _extract_regions(
         graph_model: GraphModule,
         add_mul_node: bool = False,
         return_acts: bool = False,
-        state_impl_kwargs = None)-> List[Region]:
+        state_impl_kwargs=None) -> List[Region]:
     regions = list()
     for node in graph_model.graph.nodes:
         if state_impl_kwargs is not None:
             state = WalkRegionState(**state_impl_kwargs)
         else:
             state = WalkRegionState()
-        if _is_supported_module(graph_model,
-                                node, state.supported_srcs) or (add_mul_node and
-                                          _is_scale_varying_activation(graph_model, node)):
+        if _is_supported_module(graph_model, node, state.supported_srcs) or (
+                add_mul_node and _is_scale_varying_activation(graph_model, node)):
             if _is_scale_varying_activation(graph_model, node):
                 module = get_module(graph_model, node.target)
                 state.add_acts(node.target, module)
@@ -938,8 +959,10 @@ class EqualizeGraph(GraphTransform):
               graph_model: GraphModule) -> Union[Tuple[GraphModule, Set[Tuple[str]]], GraphModule]:
         # It is not possible to equalize through LayerNorm/BatchNorm as sink
         supported_sinks = list(_supported_layers)
-        supported_sinks = [x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)]
-        regions = _extract_regions(graph_model, state_impl_kwargs={'supported_sinks':supported_sinks})
+        supported_sinks = [
+            x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)]
+        regions = _extract_regions(
+            graph_model, state_impl_kwargs={'supported_sinks': supported_sinks})
         if len(regions) > 0:
             graph_model = _equalize(
                 graph_model,
@@ -1110,11 +1133,16 @@ class GraphActivationEqualization(ActivationEqualization):
         self.hooked_modules = set()
         self.add_mul_node = add_mul_node
         self.co_optimize_act_weights = co_optimize_act_weights
-        
+
         # It is not possible to equalize through LayerNorm/BatchNorm as sink
         supported_sinks = list(_supported_layers)
-        supported_sinks = [x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)]
-        self.regions = _extract_regions(model, add_mul_node=add_mul_node, return_acts=True, state_impl_kwargs={'supported_sinks': supported_sinks})
+        supported_sinks = [
+            x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)]
+        self.regions = _extract_regions(
+            model,
+            add_mul_node=add_mul_node,
+            return_acts=True,
+            state_impl_kwargs={'supported_sinks': supported_sinks})
 
         if self.scale_computation_type == 'maxabs':
             self.scale_fn = _channel_maxabs
@@ -1202,13 +1230,15 @@ class GraphActivationEqualization(ActivationEqualization):
         rewriter = InsertModuleCallAfter(mul_factor_name, act_node)
         rewriter.apply(self.model)
 
+
 def _apply_had_device(tensor, had_K, K):
     is_cuda = 'cuda' in str(tensor.device) and torch.version.cuda is not None
     # Accelerated kernel only available for CUDA
-    if is_cuda:
+    if is_cuda and fast_hadamard_transform is not None:
         return matmul_hadU_cuda(tensor, had_K, K)
     else:
         return matmul_hadU(tensor)
+
 
 def _apply_rotate(model: nn.Module, regions: List[Region], insert_rotation_func: bool = False):
     for region in regions:
@@ -1219,7 +1249,7 @@ def _apply_rotate(model: nn.Module, regions: List[Region], insert_rotation_func:
 
         try:
             # Build hadamard rotation matrix
-            had_K, K = get_hadK(hidden_dim) 
+            had_K, K = get_hadK(hidden_dim)
         except AssertionError as e:
             print("Incomptible shapes")
             raise e
@@ -1232,16 +1262,17 @@ def _apply_rotate(model: nn.Module, regions: List[Region], insert_rotation_func:
             weight = module.weight.data
 
             if axis == 0:
-                weight =  _apply_had_device(weight.t(), had_K, K).t() # matmul_hadU_cuda(weight.t(), had_K, K).t()
+                weight = _apply_had_device(weight.t(), had_K,
+                                           K).t()  # matmul_hadU_cuda(weight.t(), had_K, K).t()
             elif axis == 1:
-                weight =  _apply_had_device(weight, had_K, K)
+                weight = _apply_had_device(weight, had_K, K)
             else:
                 raise RuntimeError("Not supported yet")
             module.weight.data = weight
 
             if getattr(module, 'bias', None) is not None:
                 bias = module.bias.data
-                bias =  _apply_had_device(bias, had_K, K) #matmul_hadU_cuda(bias, had_K, K)
+                bias = _apply_had_device(bias, had_K, K)  #matmul_hadU_cuda(bias, had_K, K)
                 module.bias.data = bias
             if hasattr(module, 'offload_params'):
                 module.offload_params(module)
@@ -1252,11 +1283,11 @@ def _apply_rotate(model: nn.Module, regions: List[Region], insert_rotation_func:
                 module.allocate_params(module)
             axis = _get_input_axis(module)
             weight = module.weight.data
-            
+
             if axis == 1:
-                weight =  _apply_had_device(weight, had_K, K)
+                weight = _apply_had_device(weight, had_K, K)
             elif axis == 0:
-                weight =  _apply_had_device(weight.t(), had_K, K).t()
+                weight = _apply_had_device(weight.t(), had_K, K).t()
             else:
                 raise RuntimeError("Not supported yet")
 
@@ -1267,7 +1298,7 @@ def _apply_rotate(model: nn.Module, regions: List[Region], insert_rotation_func:
             if insert_rotation_func and len(region.srcs) == 0:
                 # print(name, module.in_features, K)
                 rewriter = ModuleInstanceToModuleInstance(
-                module, RotatedModule(had_mat=had_K, k=K, layer=module))
+                    module, RotatedModule(had_mat=had_K, k=K, layer=module))
                 rewriter.apply(model)
 
 
@@ -1284,11 +1315,18 @@ class GraphRotationEqualization(GraphTransform):
     def apply(self,
               graph_model: GraphModule) -> Union[Tuple[GraphModule, Set[Tuple[str]]], GraphModule]:
 
-        regions =  _extract_regions(graph_model, state_impl_kwargs={'supported_srcs':self.supported_srcs, 'supported_sinks':self.supported_sinks, 'scale_invariant_layers':self.scale_invariant_layers, 'scale_invariant_function': self.scale_invariant_function })
+        regions = _extract_regions(
+            graph_model,
+            state_impl_kwargs={
+                'supported_srcs': self.supported_srcs,
+                'supported_sinks': self.supported_sinks,
+                'scale_invariant_layers': self.scale_invariant_layers,
+                'scale_invariant_function': self.scale_invariant_function})
         if len(regions) > 0:
             _apply_rotate(graph_model, regions, False)
 
         return graph_model
+
 
 def _replace_bias(next_module, new_bias):
     new_bias = new_bias.view(-1)
@@ -1323,13 +1361,16 @@ class MergeLnAffine(GraphTransform):
         self.supported_sinks = (torch.nn.Linear)
 
     def apply(self, graph_model: GraphModule) -> GraphModule:
-        regions = _extract_regions(graph_model, state_impl_kwargs={'supported_srcs':self.supported_srcs, 'supported_sinks':self.supported_sinks})
+        regions = _extract_regions(
+            graph_model,
+            state_impl_kwargs={
+                'supported_srcs': self.supported_srcs, 'supported_sinks': self.supported_sinks})
 
         if len(regions) > 0:
             scaled_biases = set()
             for region in regions:
                 layernorm_module_name = next(iter(region.srcs))
-                layernorm_module =region.get_module_from_name(layernorm_module_name)
+                layernorm_module = region.get_module_from_name(layernorm_module_name)
                 if not layernorm_module.elementwise_affine:
                     continue
                 for name, indexes in region.sinks.items():
@@ -1342,7 +1383,7 @@ class MergeLnAffine(GraphTransform):
                 if hasattr(layernorm_module, 'bias'):
                     layernorm_module.bias.data.fill_(0.)
         return graph_model
-    
+
 
 class LayerwiseActivationRotation(GraphTransform):
 
@@ -1375,5 +1416,3 @@ class LayerwiseActivationRotation(GraphTransform):
         if len(regions) > 0:
             _apply_rotate(model, regions, True)
         return model
-
-

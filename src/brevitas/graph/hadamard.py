@@ -3,7 +3,10 @@
 
 import math
 
-import fast_hadamard_transform
+try:
+    import fast_hadamard_transform
+except:
+    fast_hadamard_transform = None
 import torch
 
 # Adapted from https://github.com/Cornell-RelaxML/quip-sharp/blob/main/lib/utils/matmul_had.py
