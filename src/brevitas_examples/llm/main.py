@@ -498,10 +498,7 @@ def parse_args(args):
         action='store_true',
         help='Apply weight equalization. Relevant to ReLU based models (e.g. OPT).')
     parser.add_argument(
-        '--graph-rotation',
-        default=True,
-        action='store_true',
-        help='Apply graph rotation equalization')
+        '--graph-rotation', action='store_true', help='Apply graph rotation equalization')
     parser.add_argument(
         '--layerwise-rotation', action='store_true', help='Apply layerwise rotation equalization')
     parser.add_argument(
