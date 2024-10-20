@@ -8,7 +8,6 @@ import sys
 from warnings import warn
 
 import numpy as np
-from brevitas.graph.equalize import GraphRotationEqualization, LayerwiseActivationRotation
 from optimum.amd.brevitas.accelerate_utils import offload_model
 from optimum.amd.brevitas.accelerate_utils import remove_hooks
 from optimum.amd.brevitas.data_utils import compute_perplexity
@@ -19,6 +18,8 @@ from transformers import AutoTokenizer
 
 from brevitas.export import export_torch_qcdq
 from brevitas.export.onnx.standard.qcdq.manager import StdQCDQONNXManager
+from brevitas.graph.equalize import GraphRotationEqualization
+from brevitas.graph.equalize import LayerwiseActivationRotation
 from brevitas.graph.quantize import layerwise_quantize
 from brevitas_examples.common.generative.quantize import generate_quant_maps
 from brevitas_examples.common.generative.quantize import generate_quantizers
@@ -32,7 +33,8 @@ from brevitas_examples.llm.llm_quant.export import BlockQuantProxyLevelManager
 from brevitas_examples.llm.llm_quant.export import brevitas_proxy_export_mode
 from brevitas_examples.llm.llm_quant.gpxq import apply_gpfq
 from brevitas_examples.llm.llm_quant.gpxq import apply_gptq
-from brevitas_examples.llm.llm_quant.ln_affine_merge import apply_layernorm_affine_merge, replace_rmsnorm_with_torch
+from brevitas_examples.llm.llm_quant.ln_affine_merge import apply_layernorm_affine_merge
+from brevitas_examples.llm.llm_quant.ln_affine_merge import replace_rmsnorm_with_torch
 from brevitas_examples.llm.llm_quant.prepare_for_quantize import add_zero_bias_to_linear
 from brevitas_examples.llm.llm_quant.prepare_for_quantize import replace_mha_with_quantizable_layers
 from brevitas_examples.llm.llm_quant.run_utils import CastFloat16ToFloat32
@@ -177,15 +179,15 @@ def main(args):
 
     device = next(iter(model.parameters())).device
     print("Data loaded.")
-    
-    # if args.eval:
-    #     assert args.export_target != 'torch_qcdq', "TorchScript QCDQ export and Evaluation simultaneously"
-    #     print("Float model eval...")
-    #     model = offload_model(model)
-    #     float_ppl = compute_perplexity(
-    #         model, validation_loader, context_length=args.seqlen // 2, tokenizer=tokenizer)
-    #     remove_hooks(model)
-    #     print(f"Float perplexity ({args.dataset}): {float_ppl:.3f}")
+
+    if args.eval:
+        assert args.export_target != 'torch_qcdq', "TorchScript QCDQ export and Evaluation simultaneously"
+        print("Float model eval...")
+        model = offload_model(model)
+        float_ppl = compute_perplexity(
+            model, validation_loader, context_length=args.seqlen // 2, tokenizer=tokenizer)
+        remove_hooks(model)
+        print(f"Float perplexity ({args.dataset}): {float_ppl:.3f}")
 
     if args.replace_rmsnorm:
         model = replace_rmsnorm_with_torch(model, model.config)
@@ -200,10 +202,9 @@ def main(args):
     # since currently there is support only for merging into Linear
     if args.ln_affine_merge:
         print("Apply LN affine merge...")
-        # apply_layernorm_affine_merge(model)
+        apply_layernorm_affine_merge(model)
         print("LN affine merge applied.")
-    
-        
+
     if args.graph_rotation:
         assert args.ln_affine_merge
         assert args.replace_rmsnorm
@@ -481,7 +482,8 @@ def parse_args(args):
         '--act-calibration', action='store_true', help='Apply activation calibration.')
     parser.add_argument('--bias-corr', action='store_true', help='Apply bias correction.')
     parser.add_argument('--ln-affine-merge', action='store_true', help='Merge LN affine params.')
-    parser.add_argument('--replace-rmsnorm', action='store_true', help='Replace HF RMSNorms with Torch one.')
+    parser.add_argument(
+        '--replace-rmsnorm', action='store_true', help='Replace HF RMSNorms with Torch one.')
     parser.add_argument('--no-quantize', action='store_true', help='Disable quantization.')
     parser.add_argument(
         '--no-float16',
@@ -501,9 +503,7 @@ def parse_args(args):
         action='store_true',
         help='Apply graph rotation equalization')
     parser.add_argument(
-        '--layerwise-rotation',
-        action='store_true',
-        help='Apply layerwise rotation equalization')
+        '--layerwise-rotation', action='store_true', help='Apply layerwise rotation equalization')
     parser.add_argument(
         '--act-equalization',
         default=None,
