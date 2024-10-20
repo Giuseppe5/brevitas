@@ -177,7 +177,7 @@ class Region:
     def max_shape_sinks(self):
         max_shape_sinks = 0
         for name, indexes in self.sinks.items():
-            max_shape_sinks = max(max_shape_sinks, indexes.end + indexes.offset)
+            max_shape_sinks = max(max_shape_sinks, indexes.offset + (indexes.end - indexes.start))
         return max_shape_sinks
 
     @property
@@ -958,9 +958,8 @@ class EqualizeGraph(GraphTransform):
     def apply(self,
               graph_model: GraphModule) -> Union[Tuple[GraphModule, Set[Tuple[str]]], GraphModule]:
         # It is not possible to equalize through LayerNorm/BatchNorm as sink
-        supported_sinks = list(_supported_layers)
-        supported_sinks = [
-            x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)]
+        supported_sinks = tuple([
+            x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)])
         regions = _extract_regions(
             graph_model, state_impl_kwargs={'supported_sinks': supported_sinks})
         if len(regions) > 0:
@@ -1135,9 +1134,8 @@ class GraphActivationEqualization(ActivationEqualization):
         self.co_optimize_act_weights = co_optimize_act_weights
 
         # It is not possible to equalize through LayerNorm/BatchNorm as sink
-        supported_sinks = list(_supported_layers)
-        supported_sinks = [
-            x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)]
+        supported_sinks = tuple([
+            x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)])
         self.regions = _extract_regions(
             model,
             add_mul_node=add_mul_node,

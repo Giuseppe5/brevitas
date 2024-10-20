@@ -2,8 +2,14 @@ from inspect import signature
 
 import torch
 
+from brevitas.graph.hadamard import matmul_hadU
+from brevitas.graph.hadamard import matmul_hadU_cuda
 from brevitas.nn.quant_mha import QuantMultiheadAttention
-import fast_hadamard_transform
+
+try:
+    import fast_hadamard_transform
+except:
+    fast_hadamard_transform = None
 
 INPUT_NAMES = ['input', 'inp', 'query', 'x', 'hidden_states']
 
@@ -43,6 +49,7 @@ class EqualizedModule(torch.nn.Module):
         out = self.layer(*kwargs.values())
         return out
 
+
 class RotatedModule(torch.nn.Module):
 
     def __init__(self, had_mat, k, layer) -> None:
@@ -52,20 +59,23 @@ class RotatedModule(torch.nn.Module):
         self.k = k
 
     def forward(self, inp, **kwargs):
+        is_cuda = 'cuda' in str(inp.device) and torch.version.cuda is not None
+        if is_cuda and fast_hadamard_transform is not None:
+            inp = matmul_hadU_cuda(inp, self.had_mat, self.k)
+        else:
+            inp = matmul_hadU(inp)
+        # shape = inp.shape
+        # n = inp.shape[-1]
+        # if self.k == 1:
+        #     inp = fast_hadamard_transform.hadamard_transform(inp.contiguous(), 1.0/torch.tensor(n).sqrt())
+        #     o = self.layer(inp)
 
-        shape = inp.shape
-        n = inp.shape[-1]
-        if self.k == 1:
-            inp = fast_hadamard_transform.hadamard_transform(inp.contiguous(), 1.0/torch.tensor(n).sqrt()) 
-            o = self.layer(inp)
-
-        # if transpose:
-        #     hadK = hadK.T.contiguous()
-        inp = inp.view(*inp.shape[:-1], self.k, n // self.k)
-        inp = fast_hadamard_transform.hadamard_transform(inp.contiguous(), 1.0/torch.tensor(n).sqrt())
-        inp = self.had_mat.to(inp.device).to(inp.dtype) @ inp
-        inp = inp.reshape(shape)
+        # # if transpose:
+        # #     hadK = hadK.T.contiguous()
+        # inp = inp.view(*inp.shape[:-1], self.k, n // self.k)
+        # inp = fast_hadamard_transform.hadamard_transform(inp.contiguous(), 1.0/torch.tensor(n).sqrt())
+        # inp = self.had_mat.to(inp.device).to(inp.dtype) @ inp
+        # inp = inp.reshape(shape)
         o = self.layer(inp)
 
         return o
-

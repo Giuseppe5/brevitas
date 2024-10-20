@@ -8,19 +8,25 @@ from torch import nn
 
 # from brevitas.graph.equalize import _is_reshaping_op
 from brevitas.graph.base import ModuleToModuleByClass
-from brevitas.graph.equalize import MergeLnAffine, _is_scale_invariant_module
+from brevitas.graph.equalize import _is_scale_invariant_module
+from brevitas.graph.equalize import MergeLnAffine
 from brevitas.graph.utils import get_module
 from brevitas_examples.llm.llm_quant.run_utils import cast_to_float32
+
 
 def replace_rmsnorm_with_torch(model, config):
     from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
     ALL_RMSNORM_LAYERS = [x for x in ALL_LAYERNORM_LAYERS if 'RMS' in x.__name__]
-    rewriters = [ModuleToModuleByClass(rms_cls, torch.nn.RMSNorm, normalized_shape = config.hidden_size, eps = config.rms_norm_eps) for rms_cls in ALL_RMSNORM_LAYERS]
+    rewriters = [
+        ModuleToModuleByClass(
+            rms_cls, torch.nn.RMSNorm, normalized_shape=config.hidden_size, eps=config.rms_norm_eps)
+        for rms_cls in ALL_RMSNORM_LAYERS]
     dtype = next(iter(model.parameters())).dtype
     for r in rewriters:
         model = r.apply(model)
     model = model.to(dtype)
     return model
+
 
 def replace_bias(next_module, new_bias):
     new_bias = new_bias.view(-1)
