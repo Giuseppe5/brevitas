@@ -3,7 +3,7 @@ from inspect import signature
 import torch
 
 from brevitas.nn.quant_mha import QuantMultiheadAttention
-from brevitas.quant_tensor.base_quant_tensor import QuantTensor
+import fast_hadamard_transform
 
 INPUT_NAMES = ['input', 'inp', 'query', 'x', 'hidden_states']
 
@@ -45,15 +45,27 @@ class EqualizedModule(torch.nn.Module):
 
 class RotatedModule(torch.nn.Module):
 
-    def __init__(self, h_inv, layer) -> None:
+    def __init__(self, had_mat, k, layer) -> None:
         super().__init__()
-        self.h_inv = torch.nn.Parameter(h_inv)
+        self.had_mat = torch.nn.Parameter(had_mat).cpu()
         self.layer = layer
+        self.k = k
 
-    def forward(self, *args, **kwargs):
-        inp = args[0]
-        if isinstance(inp, QuantTensor):
-            inp = inp.value
-        inp = torch.matmul(inp, self.h_inv)
-        out = self.layer(inp)
-        return out
+    def forward(self, inp, **kwargs):
+
+        shape = inp.shape
+        n = inp.shape[-1]
+        if self.k == 1:
+            inp = fast_hadamard_transform.hadamard_transform(inp.contiguous(), 1.0/torch.tensor(n).sqrt()) 
+            o = self.layer(inp)
+
+        # if transpose:
+        #     hadK = hadK.T.contiguous()
+        inp = inp.view(*inp.shape[:-1], self.k, n // self.k)
+        inp = fast_hadamard_transform.hadamard_transform(inp.contiguous(), 1.0/torch.tensor(n).sqrt())
+        inp = self.had_mat.to(inp.device).to(inp.dtype) @ inp
+        inp = inp.reshape(shape)
+        o = self.layer(inp)
+
+        return o
+

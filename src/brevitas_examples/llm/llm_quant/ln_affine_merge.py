@@ -6,11 +6,21 @@ SPDX-License-Identifier: MIT
 import torch
 from torch import nn
 
-from brevitas.graph.equalize import _is_reshaping_op
-from brevitas.graph.equalize import _is_scale_invariant_module
+# from brevitas.graph.equalize import _is_reshaping_op
+from brevitas.graph.base import ModuleToModuleByClass
+from brevitas.graph.equalize import MergeLnAffine, _is_scale_invariant_module
 from brevitas.graph.utils import get_module
 from brevitas_examples.llm.llm_quant.run_utils import cast_to_float32
 
+def replace_rmsnorm_with_torch(model, config):
+    from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
+    ALL_RMSNORM_LAYERS = [x for x in ALL_LAYERNORM_LAYERS if 'RMS' in x.__name__]
+    rewriters = [ModuleToModuleByClass(rms_cls, torch.nn.RMSNorm, normalized_shape = config.hidden_size, eps = config.rms_norm_eps) for rms_cls in ALL_RMSNORM_LAYERS]
+    dtype = next(iter(model.parameters())).dtype
+    for r in rewriters:
+        model = r.apply(model)
+    model = model.to(dtype)
+    return model
 
 def replace_bias(next_module, new_bias):
     new_bias = new_bias.view(-1)
@@ -49,7 +59,7 @@ def merge_layernorm_affine_params(graph_model):
             module = get_module(graph_model, node.target)
             if isinstance(module, nn.LayerNorm):
                 for next in node.users:
-                    while (_is_reshaping_op(next) or _is_scale_invariant_module(graph_model, next)):
+                    while (_is_scale_invariant_module(graph_model, next)):
                         next = node.next
                     if next.op == 'call_module':
                         next_module = get_module(graph_model, next.target)
@@ -83,8 +93,7 @@ def merge_layernorm_affine_params(graph_model):
 
 
 @torch.no_grad()
-def apply_layernorm_affine_merge(graph_model, dtype):
-    # We can't do fp16 tracing on CPU as many kernels are not implemented
-    # So we have to cast to fp32 first, trace, apply merging, and then cast back
-    with cast_to_float32(graph_model, dtype):
-        merge_layernorm_affine_params(graph_model)
+def apply_layernorm_affine_merge(graph_model):
+    eq = MergeLnAffine()
+    graph_model = eq.apply(graph_model)
+    return graph_model

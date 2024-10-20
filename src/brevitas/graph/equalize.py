@@ -18,6 +18,7 @@ from brevitas.fx import GraphModule
 from brevitas.fx import Node
 from brevitas.graph.base import GraphTransform
 from brevitas.graph.base import ModuleInstanceToModuleInstance
+from brevitas.graph.hadamard import get_hadK, matmul_hadU, matmul_hadU_cuda
 from brevitas.graph.utils import get_module
 from brevitas.graph.utils import get_node
 from brevitas.nn.equalized_layer import EqualizedModule, RotatedModule
@@ -25,12 +26,8 @@ from brevitas.nn.equalized_layer import INPUT_NAMES
 from brevitas.nn.quant_scale_bias import ScaleBias
 from brevitas.utils.torch_utils import KwargsForwardHook
 
-from .base import GraphTransform
 from .base import InsertModuleCallAfter
-try:
-    from scipy.linalg import hadamard
-except ImportError:
-    hadamard = None
+
 __all__ = ['GraphActivationEqualization', 'LayerwiseActivationEqualization', 'EqualizeGraph']
 
 EPSILON = 1e-9
@@ -680,7 +677,7 @@ def _is_scale_varying_activation(graph_model, node):
 
 
 def _is_scale_invariant_function(node: Node, scale_invariant_op: Set =_scale_invariant_op) -> bool:
-    out = node.op == 'call_function' and node.target in scale_invariant_op + _select_op + _reshaping_op
+    out = node.op in ('call_function', 'call_method') and node.target in scale_invariant_op + _select_op + _reshaping_op
     if node.target == torch.nn.functional.interpolate:
         out &= node.kwargs.get('mode', None) == 'nearest'
     return out
@@ -1205,54 +1202,74 @@ class GraphActivationEqualization(ActivationEqualization):
         rewriter = InsertModuleCallAfter(mul_factor_name, act_node)
         rewriter.apply(self.model)
 
+def _apply_had_device(tensor, had_K, K):
+    is_cuda = 'cuda' in str(tensor.device) and torch.version.cuda is not None
+    # Accelerated kernel only available for CUDA
+    if is_cuda:
+        return matmul_hadU_cuda(tensor, had_K, K)
+    else:
+        return matmul_hadU(tensor)
 
 def _apply_rotate(model: nn.Module, regions: List[Region], insert_rotation_func: bool = False):
     for region in regions:
-        for name in (region.srcs_names + region.sinks_names):
-            module = region.get_module_from_name(name)
-            if hasattr(module, 'allocate_params'):
-                module.allocate_params(module)
 
         if not insert_rotation_func and not region.is_valid:
             continue
         hidden_dim = region.max_shape_sinks
-        # Check that hidden_dim is an exact Po2
-        if torch.log2(torch.tensor(hidden_dim)) != torch.ceil(torch.log2(torch.tensor(hidden_dim))):
-            continue
 
-        # Build hadamard rotation matrix
-        h = torch.from_numpy(hadamard(hidden_dim)) / torch.sqrt(torch.tensor(hidden_dim))
-        hadamard_inverse = h.t()
+        try:
+            # Build hadamard rotation matrix
+            had_K, K = get_hadK(hidden_dim) 
+        except AssertionError as e:
+            print("Incomptible shapes")
+            raise e
+
         for name, indexes in region.srcs.items():
             module = region.get_module_from_name(name)
+            if hasattr(module, 'allocate_params'):
+                module.allocate_params(module)
             axis = _get_output_axis(module)
-            h_inv = hadamard_inverse.type_as(module.weight.data)
+            weight = module.weight.data
+
             if axis == 0:
-                module.weight.data = torch.matmul(h_inv, module.weight.data)
+                weight =  _apply_had_device(weight.t(), had_K, K).t() # matmul_hadU_cuda(weight.t(), had_K, K).t()
             elif axis == 1:
-                module.weight.data = torch.matmul(module.weight.data, h_inv)
+                weight =  _apply_had_device(weight, had_K, K)
             else:
                 raise RuntimeError("Not supported yet")
+            module.weight.data = weight
+
+            if getattr(module, 'bias', None) is not None:
+                bias = module.bias.data
+                bias =  _apply_had_device(bias, had_K, K) #matmul_hadU_cuda(bias, had_K, K)
+                module.bias.data = bias
+            if hasattr(module, 'offload_params'):
+                module.offload_params(module)
 
         for name, indexes in region.sinks.items():
             module = region.get_module_from_name(name)
-            h = h.type_as(module.weight.data)
+            if hasattr(module, 'allocate_params'):
+                module.allocate_params(module)
             axis = _get_input_axis(module)
+            weight = module.weight.data
+            
             if axis == 1:
-                module.weight.data = torch.matmul(module.weight.data, h)
+                weight =  _apply_had_device(weight, had_K, K)
             elif axis == 0:
-                module.weight.data = torch.matmul(h, module.weight.data)
+                weight =  _apply_had_device(weight.t(), had_K, K).t()
             else:
                 raise RuntimeError("Not supported yet")
-            if insert_rotation_func and len(region.srcs) == 0:
-                rewriter = ModuleInstanceToModuleInstance(
-                module, RotatedModule(h_inv=hadamard_inverse, layer=module))
-            rewriter.apply(model)
 
-        for name in (region.srcs_names + region.sinks_names):
-            module = region.get_module_from_name(name)
+            module.weight.data = weight
             if hasattr(module, 'offload_params'):
                 module.offload_params(module)
+
+            if insert_rotation_func and len(region.srcs) == 0:
+                # print(name, module.in_features, K)
+                rewriter = ModuleInstanceToModuleInstance(
+                module, RotatedModule(had_mat=had_K, k=K, layer=module))
+                rewriter.apply(model)
+
 
 class GraphRotationEqualization(GraphTransform):
 
@@ -1266,9 +1283,8 @@ class GraphRotationEqualization(GraphTransform):
 
     def apply(self,
               graph_model: GraphModule) -> Union[Tuple[GraphModule, Set[Tuple[str]]], GraphModule]:
-        # It is not possible to equalize through LayerNorm/BatchNorm as sink
 
-        regions =  _extract_regions(graph_model, state_impl_kwargs={'supported_srcs':self.supported_srcs, 'supported_sinks':self.supported_sinks, 'scale_invariant_layers':self.scale_invariant_layers })
+        regions =  _extract_regions(graph_model, state_impl_kwargs={'supported_srcs':self.supported_srcs, 'supported_sinks':self.supported_sinks, 'scale_invariant_layers':self.scale_invariant_layers, 'scale_invariant_function': self.scale_invariant_function })
         if len(regions) > 0:
             _apply_rotate(graph_model, regions, False)
 
@@ -1291,6 +1307,7 @@ def _merge_ln(layer_norm, next_module, scale_bias_by_weight):
     # We can't do an inplace update as some layers we merge into like lm_head might share the weight tensor
     scale = layer_norm.weight.data.view(view_shape).expand_as(next_module.weight)
     next_module.weight = torch.nn.Parameter(next_module.weight.clone() * scale)
+
     # Merge bias, new_bias includes the bias of next_module by going through its fwd
     if hasattr(layer_norm, 'bias'):
         inp = layer_norm.bias.data.view(view_shape)
@@ -1307,6 +1324,7 @@ class MergeLnAffine(GraphTransform):
 
     def apply(self, graph_model: GraphModule) -> GraphModule:
         regions = _extract_regions(graph_model, state_impl_kwargs={'supported_srcs':self.supported_srcs, 'supported_sinks':self.supported_sinks})
+
         if len(regions) > 0:
             scaled_biases = set()
             for region in regions:
@@ -1314,7 +1332,6 @@ class MergeLnAffine(GraphTransform):
                 layernorm_module =region.get_module_from_name(layernorm_module_name)
                 if not layernorm_module.elementwise_affine:
                     continue
-                
                 for name, indexes in region.sinks.items():
                     module = region.get_module_from_name(name)
                     scale_bias = id(module) not in scaled_biases
@@ -1327,7 +1344,7 @@ class MergeLnAffine(GraphTransform):
         return graph_model
     
 
-class LayerwiseActivationEqualization(GraphTransform):
+class LayerwiseActivationRotation(GraphTransform):
 
     def __init__(self, blacklist_layer=None):
         super(GraphTransform, self).__init__()
