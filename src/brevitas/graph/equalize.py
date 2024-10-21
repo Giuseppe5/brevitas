@@ -1243,20 +1243,51 @@ def _apply_had_device(tensor, had_K, K):
         return matmul_hadU(tensor)
 
 
-def _apply_rotate(model: nn.Module, regions: List[Region]):
-    for region in regions:
-        insert_rotation_func = len(region.srcs) == 0
+def _apply_ort_device(tensor, ort, *args):
+    ort = ort.type_as(tensor)
+    return torch.matmul(tensor, ort)
 
-        if not insert_rotation_func and not region.is_valid:
+
+def random_orthogonal_matrix(size):
+    """
+    Generate a random orthogonal matrix of the specified size.
+    First, we generate a random matrix with entries from a standard distribution.
+    Then, we use QR decomposition to obtain an orthogonal matrix.
+    Finally, we multiply by a diagonal matrix with diag r to adjust the signs.
+
+    Args:
+    size (int): The size of the matrix (size x size).
+
+    Returns:
+    torch.Tensor: An orthogonal matrix of the specified size.
+    """
+    torch.cuda.empty_cache()
+    random_matrix = torch.randn(size, size, dtype=torch.float64)
+    q, r = torch.linalg.qr(random_matrix)
+    q *= torch.sign(torch.diag(r)).unsqueeze(0)
+    return q
+
+
+def _apply_rotate(model: nn.Module, regions: List[Region], partial_rotation_method='had'):
+    for region in regions:
+        insert_rotation_module = len(region.srcs) == 0
+
+        if not insert_rotation_module and not region.is_valid:
             continue
         hidden_dim = region.max_shape_sinks
 
-        try:
-            # Build hadamard rotation matrix
-            had_K, K = get_hadK(hidden_dim)
-        except AssertionError as e:
-            print(f"Incomptible shapes {hidden_dim}")
-            continue
+        if not insert_rotation_module and partial_rotation_method == 'ort':
+            rot_mat = random_orthogonal_matrix(hidden_dim)
+            K = None
+            rot_func = _apply_ort_device
+        else:
+            try:
+                # Build hadamard rotation matrix
+                rot_mat, K = get_hadK(hidden_dim)
+            except AssertionError as e:
+                print(f"Incomptible shapes {hidden_dim}")
+                continue
+            rot_func = _apply_had_device
 
         for name, indexes in region.srcs.items():
             module = region.get_module_from_name(name)
@@ -1266,17 +1297,16 @@ def _apply_rotate(model: nn.Module, regions: List[Region]):
             weight = module.weight.data
 
             if axis == 0:
-                weight = _apply_had_device(weight.t(), had_K,
-                                           K).t()  # matmul_hadU_cuda(weight.t(), had_K, K).t()
+                weight = rot_func(weight.t(), rot_mat, K).t()
             elif axis == 1:
-                weight = _apply_had_device(weight, had_K, K)
+                weight = rot_func(weight, rot_mat, K)
             else:
                 raise RuntimeError("Not supported yet")
             module.weight.data = weight
 
             if getattr(module, 'bias', None) is not None:
                 bias = module.bias.data
-                bias = _apply_had_device(bias, had_K, K)  #matmul_hadU_cuda(bias, had_K, K)
+                bias = rot_func(bias, rot_mat, K)
                 module.bias.data = bias
             if hasattr(module, 'offload_params'):
                 module.offload_params(module)
@@ -1289,9 +1319,9 @@ def _apply_rotate(model: nn.Module, regions: List[Region]):
             weight = module.weight.data
 
             if axis == 1:
-                weight = _apply_had_device(weight, had_K, K)
+                weight = rot_func(weight, rot_mat, K)
             elif axis == 0:
-                weight = _apply_had_device(weight.t(), had_K, K).t()
+                weight = rot_func(weight.t(), rot_mat, K).t()
             else:
                 raise RuntimeError("Not supported yet")
 
@@ -1299,10 +1329,10 @@ def _apply_rotate(model: nn.Module, regions: List[Region]):
             if hasattr(module, 'offload_params'):
                 module.offload_params(module)
 
-            if insert_rotation_func and len(region.srcs) == 0:
+            if insert_rotation_module and len(region.srcs) == 0:
                 # print(name, module.in_features, K)
                 rewriter = ModuleInstanceToModuleInstance(
-                    module, RotatedModule(had_mat=had_K, k=K, layer=module))
+                    module, RotatedModule(had_mat=rot_mat, k=K, layer=module))
                 rewriter.apply(model)
 
 
@@ -1335,7 +1365,8 @@ class GraphRotationEqualization(RotationEqualization):
             self,
             blacklist_layers: Optional[List[str]] = None,
             orphan_sink: bool = False,
-            rotate_matmul: bool = False) -> None:
+            rotate_matmul: bool = False,
+            partial_rotation_method: str = 'had') -> None:
         super(GraphRotationEqualization, self).__init__()
 
         self.supported_srcs = (nn.Linear, nn.Embedding)
@@ -1345,6 +1376,7 @@ class GraphRotationEqualization(RotationEqualization):
         self.blacklist_layers = blacklist_layers
         self.orphan_sink = orphan_sink
         self.rotate_matmul = rotate_matmul
+        self.partial_rotation_method = partial_rotation_method
 
     def rotate_matmuls(self, graph_module):
         matmul_nodes = list(graph_module.graph.nodes)
@@ -1388,7 +1420,7 @@ class GraphRotationEqualization(RotationEqualization):
         if self.rotate_matmul:
             self.rotate_matmuls(graph_model)
         if len(regions) > 0:
-            _apply_rotate(graph_model, regions)
+            _apply_rotate(graph_model, regions, self.partial_rotation_method)
 
         return graph_model
 
