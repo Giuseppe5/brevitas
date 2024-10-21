@@ -15,12 +15,11 @@ from brevitas_examples.llm.llm_quant.run_utils import cast_to_float32
 
 
 def replace_rmsnorm_with_torch(model, config):
-    from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
-    ALL_RMSNORM_LAYERS = [x for x in ALL_LAYERNORM_LAYERS if 'RMS' in x.__name__]
+    set_of_layers = set(type(x) for x in model.modules() if 'RMS' in type(x).__name__)
     rewriters = [
         ModuleToModuleByClass(
             rms_cls, torch.nn.RMSNorm, normalized_shape=config.hidden_size, eps=config.rms_norm_eps)
-        for rms_cls in ALL_RMSNORM_LAYERS]
+        for rms_cls in set_of_layers]
     dtype = next(iter(model.parameters())).dtype
     for r in rewriters:
         model = r.apply(model)
