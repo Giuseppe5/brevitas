@@ -508,13 +508,16 @@ def linear_rms():
             self.rms = nn.RMSNorm(4)
             self.rms.weight.data = torch.randn_like(
                 self.rms.weight.data)  # Change learned parameters
-            self.linear_1 = nn.Linear(4, 8, bias=True)
+            self.linear_1 = nn.Linear(4, 8, bias=False)
             self.linear_1.weight.data.fill_(2.)
+            self.linear_2 = nn.Linear(8, 8, bias=False)
 
         def forward(self, x):
             x = self.linear(x)
             x = self.rms(x)
             x = self.linear_1(x)
+            x = self.linear_2(x) * x
+
             return x
 
     return LinearRMSModel

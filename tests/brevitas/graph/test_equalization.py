@@ -241,7 +241,8 @@ def test_act_equalization_torchvision_models(model_dict: dict, layerwise: bool):
 
 
 @requires_pt_ge('2.4')
-def test_models(rotation_fixtures):
+@pytest_cases.parametrize('partial_had', [True, False])
+def test_models(rotation_fixtures, partial_had):
 
     in_shape = IN_SIZE_LINEAR
 
@@ -250,23 +251,28 @@ def test_models(rotation_fixtures):
     inp = torch.ones(in_shape)
 
     model.eval()
-    weight = copy.deepcopy(list(iter(model.parameters()))[-2])
+    penultimate_weight = model.linear_1.weight.data
+    last_weight = model.linear_2.weight.data
     with torch.no_grad():
         expected_out = model(inp)
 
     model = symbolic_trace(model)
     merge = MergeLnAffine()
     model = merge.apply(model)
-    eq = GraphRotationEqualization()
+    eq = GraphRotationEqualization(orphan_sink=partial_had)
     model = eq.apply(model)
 
     with torch.no_grad():
         out = model(inp)
 
-    nweight = copy.deepcopy(list(iter(model.parameters()))[-2])
+    penultimate_weight_new = model.linear_1.weight.data
+
     # Invariance of the output
     assert torch.allclose(out, expected_out, atol=ATOL)
     # Rotate weights must be different
-    assert not torch.allclose(weight, nweight)
+    assert not torch.allclose(penultimate_weight, penultimate_weight_new)
     # Merging affine parameters of RMS
     assert torch.allclose(model.rms.weight.data, torch.ones_like(model.rms.weight.data))
+    if partial_had:
+        last_weight_new = model.linear_2.layer.weight.data
+        assert not torch.allclose(last_weight, last_weight_new)

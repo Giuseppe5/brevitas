@@ -1242,8 +1242,9 @@ def _apply_had_device(tensor, had_K, K):
         return matmul_hadU(tensor)
 
 
-def _apply_rotate(model: nn.Module, regions: List[Region], insert_rotation_func: bool = False):
+def _apply_rotate(model: nn.Module, regions: List[Region]):
     for region in regions:
+        insert_rotation_func = len(region.srcs) == 0
 
         if not insert_rotation_func and not region.is_valid:
             continue
@@ -1253,8 +1254,8 @@ def _apply_rotate(model: nn.Module, regions: List[Region], insert_rotation_func:
             # Build hadamard rotation matrix
             had_K, K = get_hadK(hidden_dim)
         except AssertionError as e:
-            print("Incomptible shapes")
-            raise e
+            print(f"Incomptible shapes {hidden_dim}")
+            continue
 
         for name, indexes in region.srcs.items():
             module = region.get_module_from_name(name)
@@ -1304,15 +1305,43 @@ def _apply_rotate(model: nn.Module, regions: List[Region], insert_rotation_func:
                 rewriter.apply(model)
 
 
-class GraphRotationEqualization(GraphTransform):
+class RotationEqualization(GraphTransform):
 
     def __init__(self) -> None:
+        super(RotationEqualization, self).__init__()
+
+    def find_module(self, model, regions: List, prefix=''):
+        """
+        Iterate through the model looking at immediate children of every module to look for supported modules.
+        This allows us to stop the search when we meet a top-level module that is supported.
+        """
+        if isinstance(model, self.supported_sinks):
+            if self.blacklist_layers is not None and prefix in self.blacklist_layers:
+                return
+            weight = get_weight_sink(model)
+            eq_indexes = EqualizationIndexes(0, weight.shape[0], 0)
+            region = Region(sinks={'sinks0': eq_indexes}, name_to_module={'sinks0': model})
+            regions.append(region)
+        else:
+            for name, module in model.named_children():
+                full_name = prefix + '.' + name if prefix != '' else name
+                self.find_module(module, regions, full_name)
+
+
+class GraphRotationEqualization(RotationEqualization):
+
+    def __init__(
+            self,
+            blacklist_layers: Optional[List[str]] = None,
+            orphan_sink: Optional[bool] = False) -> None:
         super(GraphRotationEqualization, self).__init__()
 
         self.supported_srcs = (nn.Linear, nn.Embedding)
         self.supported_sinks = (nn.Linear)
         self.scale_invariant_layers = (RMSNorm,)
         self.scale_invariant_function = ()
+        self.blacklist_layers = blacklist_layers
+        self.orphan_sink = orphan_sink
 
     def apply(self,
               graph_model: GraphModule) -> Union[Tuple[GraphModule, Set[Tuple[str]]], GraphModule]:
@@ -1324,8 +1353,20 @@ class GraphRotationEqualization(GraphTransform):
                 'supported_sinks': self.supported_sinks,
                 'scale_invariant_layers': self.scale_invariant_layers,
                 'scale_invariant_function': self.scale_invariant_function})
+        eq_layers = set()
+        orphan_regions = []
+        self.find_module(graph_model, orphan_regions)
+        for r in regions:
+            id_list = [id(r.name_to_module[sink_name]) for sink_name in r.sinks_names]
+            eq_layers.update(id_list)
+        if self.orphan_sink:
+            for o_r in orphan_regions:
+                # Layerwise have only a single sink named 'sinks0'
+                id_sink = id(o_r.get_module_from_name('sinks0'))
+                if id_sink not in eq_layers:
+                    regions.append(o_r)
         if len(regions) > 0:
-            _apply_rotate(graph_model, regions, False)
+            _apply_rotate(graph_model, regions)
 
         return graph_model
 
@@ -1387,7 +1428,7 @@ class MergeLnAffine(GraphTransform):
         return graph_model
 
 
-class LayerwiseActivationRotation(GraphTransform):
+class LayerwiseActivationRotation(RotationEqualization):
 
     def __init__(self, blacklist_layer=None):
         super(GraphTransform, self).__init__()
@@ -1395,26 +1436,9 @@ class LayerwiseActivationRotation(GraphTransform):
         self.supported_sinks = (nn.Linear)
         self.blacklist_layers = blacklist_layer
 
-    def find_module(self, model, regions: List, prefix=''):
-        """
-        Iterate through the model looking at immediate children of every module to look for supported modules.
-        This allows us to stop the search when we meet a top-level module that is supported.
-        """
-        if isinstance(model, self.supported_sinks):
-            if self.blacklist_layers is not None and prefix in self.blacklist_layers:
-                return
-            weight = get_weight_sink(model)
-            eq_indexes = EqualizationIndexes(0, weight.shape[0], 0)
-            region = Region(sinks={'sinks0': eq_indexes}, name_to_module={'sinks0': model})
-            regions.append(region)
-        else:
-            for name, module in model.named_children():
-                full_name = prefix + '.' + name if prefix != '' else name
-                self.find_module(module, regions, full_name)
-
     def apply(self, model: nn.Module) -> nn.Module:
         regions: List[Region] = []
         self.find_module(model, regions)
         if len(regions) > 0:
-            _apply_rotate(model, regions, True)
+            _apply_rotate(model, regions)
         return model
