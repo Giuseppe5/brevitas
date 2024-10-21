@@ -28,6 +28,7 @@ from brevitas.graph.hadamard import matmul_hadU_cuda
 from brevitas.graph.utils import get_module
 from brevitas.graph.utils import get_node
 from brevitas.nn.equalized_layer import EqualizedModule
+from brevitas.nn.equalized_layer import functional_rotate_input
 from brevitas.nn.equalized_layer import INPUT_NAMES
 from brevitas.nn.equalized_layer import RotatedModule
 from brevitas.nn.quant_scale_bias import ScaleBias
@@ -1333,7 +1334,8 @@ class GraphRotationEqualization(RotationEqualization):
     def __init__(
             self,
             blacklist_layers: Optional[List[str]] = None,
-            orphan_sink: Optional[bool] = False) -> None:
+            orphan_sink: bool = False,
+            rotate_matmul: bool = False) -> None:
         super(GraphRotationEqualization, self).__init__()
 
         self.supported_srcs = (nn.Linear, nn.Embedding)
@@ -1342,6 +1344,24 @@ class GraphRotationEqualization(RotationEqualization):
         self.scale_invariant_function = ()
         self.blacklist_layers = blacklist_layers
         self.orphan_sink = orphan_sink
+        self.rotate_matmul = rotate_matmul
+
+    def rotate_matmuls(self, graph_module):
+        matmul_nodes = list(graph_module.graph.nodes)
+        matmul_nodes = [c for c in matmul_nodes if c.name == 'matmul']
+        for node in matmul_nodes:
+            with graph_module.graph.inserting_before(node):
+                matmul_arg0 = graph_module.graph.call_function(
+                    functional_rotate_input, args=(node.args[0],))
+                matmul_arg1 = graph_module.graph.call_function(
+                    functional_rotate_input, args=(node.args[1],), kwargs={'transpose': True})
+            args = list(node.args)
+            args[0] = matmul_arg0
+            args[1] = matmul_arg1
+            node.args = tuple(args)
+
+            graph_module.recompile()
+            graph_module.graph.lint()
 
     def apply(self,
               graph_model: GraphModule) -> Union[Tuple[GraphModule, Set[Tuple[str]]], GraphModule]:
@@ -1365,6 +1385,8 @@ class GraphRotationEqualization(RotationEqualization):
                 id_sink = id(o_r.get_module_from_name('sinks0'))
                 if id_sink not in eq_layers:
                     regions.append(o_r)
+        if self.rotate_matmul:
+            self.rotate_matmuls(graph_model)
         if len(regions) > 0:
             _apply_rotate(graph_model, regions)
 

@@ -517,6 +517,7 @@ def linear_rms():
             x = self.rms(x)
             x = self.linear_1(x)
             x = self.linear_2(x) * x
+            x = torch.matmul(x.flatten(1), x.flatten(1).t())
 
             return x
 
