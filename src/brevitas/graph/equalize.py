@@ -10,13 +10,17 @@ import operator
 from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 import warnings
 
+import packaging
+import packaging.version
 import torch
 from torch.fx import GraphModule as TorchGraphModule
 import torch.nn as nn
 
+from brevitas import torch_version
 from brevitas.fx import GraphModule
 from brevitas.fx import Node
 from brevitas.graph.base import GraphTransform
+from brevitas.graph.base import InsertModuleCallAfter
 from brevitas.graph.base import ModuleInstanceToModuleInstance
 from brevitas.graph.hadamard import get_hadK
 from brevitas.graph.hadamard import matmul_hadU
@@ -29,12 +33,17 @@ from brevitas.nn.equalized_layer import RotatedModule
 from brevitas.nn.quant_scale_bias import ScaleBias
 from brevitas.utils.torch_utils import KwargsForwardHook
 
-from .base import InsertModuleCallAfter
-
+# External optional dependency
 try:
     import fast_hadamard_transform
 except:
     fast_hadamard_transform = None
+
+# RMSNorm was introduced with torch 2.4
+if torch_version >= packaging.version.parse('2.4'):
+    RMSNorm = nn.RMSNorm
+else:
+    RMSNorm = object
 
 __all__ = ['GraphActivationEqualization', 'LayerwiseActivationEqualization', 'EqualizeGraph']
 
@@ -77,14 +86,13 @@ _scale_invariant_op = (
     operator.imul,
     operator.__mul__,
     operator.__imul__,
-    torch.nn.functional.interpolate)
+    nn.functional.interpolate)
 
 _select_op = (operator.getitem, operator.__getitem__)
 
 _reshaping_op = ('view', 'reshape', 'flatten', 'contiguous', 'to', torch.reshape, torch.flatten)
 
-_scale_varying_activations = (
-    torch.nn.Sigmoid, torch.nn.Tanh, torch.nn.ReLU6, torch.nn.GELU, torch.nn.SiLU)
+_scale_varying_activations = (nn.Sigmoid, nn.Tanh, nn.ReLU6, nn.GELU, nn.SiLU)
 
 _residual_methods = ('add', 'add_')
 
@@ -93,31 +101,6 @@ _residual_fns = (torch.add, operator.add, operator.iadd, operator.__add__, opera
 _batch_norm = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)
 
 _ignore_ops = (getattr, 'size')
-
-
-def _is_supported_module(
-        graph_model: GraphModule, node: Node, supported_layers: Set = _supported_layers) -> bool:
-    if node.op == 'call_module':
-        module = get_module(graph_model, node.target)
-        if isinstance(module, supported_layers):
-            # We support only self-attention
-            if isinstance(module, nn.MultiheadAttention):
-                kwargs = dict(node.kwargs)
-                # When using hf/accelerate, we need to check the signature of the original forward
-                forward_to_check = module._old_forward if hasattr(
-                    module, '_old_forward') else module.forward
-                kwargs.update(zip(forward_to_check.__code__.co_varnames[1:], node.args))
-                return kwargs['query'].name == kwargs['key'].name == kwargs['value'].name
-            return True
-    return False
-
-
-def _is_scale_invariant_module(
-        graph_model: GraphModule,
-        node: Node,
-        scale_invariant_layers=_scale_invariant_layers) -> bool:
-    return node.op == 'call_module' and isinstance(
-        get_module(graph_model, node.target), scale_invariant_layers)
 
 
 # Start and End identify the starting and ending channels of the weight matrix that need to be
@@ -238,10 +221,6 @@ class WalkRegionState:
         return self.name_to_module[name]
 
 
-def __str__(self):
-    return str(self.start) + '_' + str(self.end) + '_' + str(self.offset)
-
-
 _UNSUPPORTED_OP = object()
 
 
@@ -334,7 +313,7 @@ def _get_input_axis(module: nn.Module) -> Optional[int]:
             return 0
         elif module.groups == module.out_channels:
             return 1
-    elif isinstance(module, (nn.LayerNorm, nn.RMSNorm)):
+    elif isinstance(module, (nn.LayerNorm, RMSNorm)):
         # We assume normalization happens only along the channel dimension
         if len(module.weight.shape) == 1:
             return 0
@@ -362,7 +341,7 @@ def _get_output_axis(module: nn.Module) -> Optional[int]:
     elif isinstance(module,
                     (nn.Embedding, nn.ConvTranspose1d, nn.ConvTranspose2d, nn.ConvTranspose3d)):
         return 1
-    elif isinstance(module, (nn.LayerNorm, nn.RMSNorm)):
+    elif isinstance(module, (nn.LayerNorm, RMSNorm)):
         # We assume normalization happens only along the channel dimension
         if len(module.weight.shape) == 1:
             return 0
@@ -687,6 +666,31 @@ def _equalize(
     return model
 
 
+def _is_supported_module(
+        graph_model: GraphModule, node: Node, supported_layers: Set = _supported_layers) -> bool:
+    if node.op == 'call_module':
+        module = get_module(graph_model, node.target)
+        if isinstance(module, supported_layers):
+            # We support only self-attention
+            if isinstance(module, nn.MultiheadAttention):
+                kwargs = dict(node.kwargs)
+                # When using hf/accelerate, we need to check the signature of the original forward
+                forward_to_check = module._old_forward if hasattr(
+                    module, '_old_forward') else module.forward
+                kwargs.update(zip(forward_to_check.__code__.co_varnames[1:], node.args))
+                return kwargs['query'].name == kwargs['key'].name == kwargs['value'].name
+            return True
+    return False
+
+
+def _is_scale_invariant_module(
+        graph_model: GraphModule,
+        node: Node,
+        scale_invariant_layers=_scale_invariant_layers) -> bool:
+    return node.op == 'call_module' and isinstance(
+        get_module(graph_model, node.target), scale_invariant_layers)
+
+
 def _is_scale_varying_activation(graph_model, node):
     return node.op == 'call_module' and isinstance(
         get_module(graph_model, node.target), _scale_varying_activations)
@@ -696,7 +700,7 @@ def _is_scale_invariant_function(node: Node, scale_invariant_op: Set = _scale_in
     out = node.op in (
         'call_function',
         'call_method') and node.target in scale_invariant_op + _select_op + _reshaping_op
-    if node.target == torch.nn.functional.interpolate:
+    if node.target == nn.functional.interpolate:
         out &= node.kwargs.get('mode', None) == 'nearest'
     return out
 
@@ -959,7 +963,7 @@ class EqualizeGraph(GraphTransform):
               graph_model: GraphModule) -> Union[Tuple[GraphModule, Set[Tuple[str]]], GraphModule]:
         # It is not possible to equalize through LayerNorm/BatchNorm as sink
         supported_sinks = tuple([
-            x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)])
+            x for x in _supported_layers if x not in (nn.LayerNorm, *_batch_norm)])
         regions = _extract_regions(
             graph_model, state_impl_kwargs={'supported_sinks': supported_sinks})
         if len(regions) > 0:
@@ -1135,7 +1139,7 @@ class GraphActivationEqualization(ActivationEqualization):
 
         # It is not possible to equalize through LayerNorm/BatchNorm as sink
         supported_sinks = tuple([
-            x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)])
+            x for x in _supported_layers if x not in (nn.LayerNorm, *_batch_norm)])
         self.regions = _extract_regions(
             model,
             add_mul_node=add_mul_node,
@@ -1305,9 +1309,9 @@ class GraphRotationEqualization(GraphTransform):
     def __init__(self) -> None:
         super(GraphRotationEqualization, self).__init__()
 
-        self.supported_srcs = (torch.nn.Linear, torch.nn.Embedding)
-        self.supported_sinks = (torch.nn.Linear)
-        self.scale_invariant_layers = (torch.nn.RMSNorm,)
+        self.supported_srcs = (nn.Linear, nn.Embedding)
+        self.supported_sinks = (nn.Linear)
+        self.scale_invariant_layers = (RMSNorm,)
         self.scale_invariant_function = ()
 
     def apply(self,
@@ -1332,7 +1336,7 @@ def _replace_bias(next_module, new_bias):
         next_module.bias.data.copy_(new_bias)
     else:
         new_bias = new_bias.to(next_module.weight.device).to(next_module.weight.dtype)
-        next_module.register_parameter('bias', torch.nn.Parameter(new_bias))
+        next_module.register_parameter('bias', nn.Parameter(new_bias))
 
 
 def _merge_ln(layer_norm, next_module, scale_bias_by_weight):
@@ -1342,7 +1346,7 @@ def _merge_ln(layer_norm, next_module, scale_bias_by_weight):
         layer_norm.bias.data /= layer_norm.weight.data
     # We can't do an inplace update as some layers we merge into like lm_head might share the weight tensor
     scale = layer_norm.weight.data.view(view_shape).expand_as(next_module.weight)
-    next_module.weight = torch.nn.Parameter(next_module.weight.clone() * scale)
+    next_module.weight = nn.Parameter(next_module.weight.clone() * scale)
 
     # Merge bias, new_bias includes the bias of next_module by going through its fwd
     if hasattr(layer_norm, 'bias'):
@@ -1355,8 +1359,8 @@ class MergeLnAffine(GraphTransform):
 
     def __init__(self) -> None:
         super(MergeLnAffine, self).__init__()
-        self.supported_srcs = (torch.nn.RMSNorm, torch.nn.LayerNorm)
-        self.supported_sinks = (torch.nn.Linear)
+        self.supported_srcs = (RMSNorm, nn.LayerNorm)
+        self.supported_sinks = (nn.Linear)
 
     def apply(self, graph_model: GraphModule) -> GraphModule:
         regions = _extract_regions(
@@ -1388,7 +1392,7 @@ class LayerwiseActivationRotation(GraphTransform):
     def __init__(self, blacklist_layer=None):
         super(GraphTransform, self).__init__()
 
-        self.supported_sinks = (torch.nn.Linear)
+        self.supported_sinks = (nn.Linear)
         self.blacklist_layers = blacklist_layer
 
     def find_module(self, model, regions: List, prefix=''):

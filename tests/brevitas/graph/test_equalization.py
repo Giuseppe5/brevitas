@@ -17,52 +17,53 @@ from brevitas.graph.equalize import MergeLnAffine
 from brevitas.graph.standardize import DuplicateSharedStatelessModule
 from brevitas.graph.standardize import TorchFunctionalToModule
 from brevitas.graph.utils import get_module
+from tests.marker import requires_pt_ge
 
 from .equalization_fixtures import *
 
-# def test_resnet18_equalization():
-#     model = models.resnet18(pretrained=True)
 
-#     torch.manual_seed(SEED)
-#     inp = torch.randn(IN_SIZE_CONV)
-#     model.eval()
-#     model = symbolic_trace(model)
-#     expected_out = model(inp)
+def test_resnet18_equalization():
+    model = models.resnet18(pretrained=True)
 
-#     model_orig = copy.deepcopy(model)
-#     supported_sinks = list(_supported_layers)
-#     supported_sinks = tuple([
-#         x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)])
-#     regions = _extract_regions(
-#         model, state_impl_kwargs={'supported_sinks': supported_sinks})
-#     _ = equalize_test(
-#         regions, merge_bias=True, bias_shrinkage='vaiq', scale_computation_type='maxabs')
-#     out = model(inp)
+    torch.manual_seed(SEED)
+    inp = torch.randn(IN_SIZE_CONV)
+    model.eval()
+    model = symbolic_trace(model)
+    expected_out = model(inp)
 
-#     regions = sorted(regions, key=lambda region: sorted([r for r in region.srcs_names]))
-#     resnet_18_regions = sorted(RESNET_18_REGIONS, key=lambda region: region[0][0])
-#     equalized_layers = set()
-#     for r in resnet_18_regions:
-#         equalized_layers.update(r[0])
-#         equalized_layers.update(r[1])
+    model_orig = copy.deepcopy(model)
+    supported_sinks = list(_supported_layers)
+    supported_sinks = tuple([
+        x for x in _supported_layers if x not in (torch.nn.LayerNorm, *_batch_norm)])
+    regions = _extract_regions(model, state_impl_kwargs={'supported_sinks': supported_sinks})
+    _ = equalize_test(
+        regions, merge_bias=True, bias_shrinkage='vaiq', scale_computation_type='maxabs')
+    out = model(inp)
 
-#     # Check that we found all the expected regions
-#     for region, expected_region in zip(regions, resnet_18_regions):
-#         srcs = region.srcs_names
-#         sources_check = set(srcs) == set(expected_region[0])
-#         sinks = region.sinks_names
-#         sinks_check = set(sinks) == set(expected_region[1])
-#         assert sources_check
-#         assert sinks_check
+    regions = sorted(regions, key=lambda region: sorted([r for r in region.srcs_names]))
+    resnet_18_regions = sorted(RESNET_18_REGIONS, key=lambda region: region[0][0])
+    equalized_layers = set()
+    for r in resnet_18_regions:
+        equalized_layers.update(r[0])
+        equalized_layers.update(r[1])
 
-#     # Check that all layers were equalized and weights changed
-#     for layer in equalized_layers:
-#         eq_module = get_module(model, layer)
-#         orig_module = get_module(model_orig, layer)
-#         assert not torch.allclose(eq_module.weight, orig_module.weight)
+    # Check that we found all the expected regions
+    for region, expected_region in zip(regions, resnet_18_regions):
+        srcs = region.srcs_names
+        sources_check = set(srcs) == set(expected_region[0])
+        sinks = region.sinks_names
+        sinks_check = set(sinks) == set(expected_region[1])
+        assert sources_check
+        assert sinks_check
 
-#     # Check that equalization is not introducing FP variations
-#     assert torch.allclose(expected_out, out, atol=ATOL)
+    # Check that all layers were equalized and weights changed
+    for layer in equalized_layers:
+        eq_module = get_module(model, layer)
+        orig_module = get_module(model_orig, layer)
+        assert not torch.allclose(eq_module.weight, orig_module.weight)
+
+    # Check that equalization is not introducing FP variations
+    assert torch.allclose(expected_out, out, atol=ATOL)
 
 
 @pytest_cases.parametrize("merge_bias", [True, False])
@@ -239,6 +240,7 @@ def test_act_equalization_torchvision_models(model_dict: dict, layerwise: bool):
     assert any([shape != () for shape in shape_scale_regions])
 
 
+@requires_pt_ge('2.4')
 def test_models(rotation_fixtures):
 
     in_shape = IN_SIZE_LINEAR
