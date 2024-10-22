@@ -208,8 +208,11 @@ def main(args):
     if args.graph_rotation:
         assert args.ln_affine_merge
         assert args.replace_rmsnorm
-        eq = GraphRotationEqualization()
+        model = offload_model(model)
+        eq = GraphRotationEqualization(
+            orphan_sink=True, full_rotation_method=args.graph_rotation_mode)
         model = eq.apply(model)
+        remove_hooks(model)
     elif args.layerwise_rotation:
         eq = LayerwiseActivationRotation()
         model = eq.apply(model)
@@ -499,6 +502,13 @@ def parse_args(args):
         help='Apply weight equalization. Relevant to ReLU based models (e.g. OPT).')
     parser.add_argument(
         '--graph-rotation', action='store_true', help='Apply graph rotation equalization')
+    parser.add_argument(
+        '--graph-rotation-mode',
+        default='had',
+        choices=['had', 'ort'],
+        help=
+        'If GraphRotation is enabled, decide how to compute the random rotation matrix that is fully fused. Online or partial rotation will always be Hadamard'
+    )
     parser.add_argument(
         '--layerwise-rotation', action='store_true', help='Apply layerwise rotation equalization')
     parser.add_argument(

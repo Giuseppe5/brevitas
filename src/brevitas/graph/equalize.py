@@ -693,15 +693,17 @@ def _is_scale_invariant_module(
 
 
 def _is_scale_varying_activation(graph_model, node):
+    node_target = node.meta.get('orig_target', node.target)
     return node.op == 'call_module' and isinstance(
-        get_module(graph_model, node.target), _scale_varying_activations)
+        get_module(graph_model, node_target), _scale_varying_activations)
 
 
 def _is_scale_invariant_function(node: Node, scale_invariant_op: Set = _scale_invariant_op) -> bool:
+    node_target = node.meta.get('orig_target', node.target)
     out = node.op in (
         'call_function',
-        'call_method') and node.target in scale_invariant_op + _select_op + _reshaping_op
-    if node.target == nn.functional.interpolate:
+        'call_method') and node_target in scale_invariant_op + _select_op + _reshaping_op
+    if node_target == nn.functional.interpolate:
         out &= node.kwargs.get('mode', None) == 'nearest'
     return out
 
@@ -728,9 +730,10 @@ def get_weight_sink(module):
 
 
 def find_srcs_channel_dim(state, model, inp_node):
+    inp_node_target = inp_node.meta.get('orig_target', inp_node.target)
     if _is_supported_module(model, inp_node, state.supported_srcs):
         # If we meet a supported module, determine the channel shape
-        module = get_module(model, inp_node.target)
+        module = get_module(model, inp_node_target)
         # Since we are walking up, we consider the module as srcs
         weight = get_weight_source(module)
         channel = weight.shape[0]
@@ -774,13 +777,15 @@ def cat_handler(graph_model: GraphModule, starting_node: Node, state: WalkRegion
 
 
 def _is_cat(node):
-    return node.target in (torch.cat,)
+    node_target = node.meta.get('orig_target', node.target)
+    return node_target in (torch.cat,)
 
 
 def _is_add(node):
+    node_target = node.meta.get('orig_target', node.target)
     return (
-        node.op == 'call_method' and node.target in _residual_methods or
-        node.op == 'call_function' and node.target in _residual_fns)
+        node.op == 'call_method' and node_target in _residual_methods or
+        node.op == 'call_function' and node_target in _residual_fns)
 
 
 def find_srcs(graph_model: GraphModule, starting_node: Node,
@@ -790,18 +795,19 @@ def find_srcs(graph_model: GraphModule, starting_node: Node,
     for node in node_list:
         # we keep a history of how the graph has been walked already, invariant to the direction,
         # to avoid getting stuck in a loop
+        node_target = node.meta.get('orig_target', node.target)
         path = (node, starting_node)
         if path not in state.history:
             state.history.add(path)
         else:
             continue
         if _is_supported_module(graph_model, node, state.supported_srcs):
-            module = get_module(graph_model, node.target)
+            module = get_module(graph_model, node_target)
             weight = get_weight_source(module)
             eq_indexes = EqualizationIndexes(0, weight.shape[0], state.offset)
 
             # After we found a source, we need to check if it branches into multiple sinks
-            state.add_srcs(node.target, module, eq_indexes)
+            state.add_srcs(node_target, module, eq_indexes)
             find_sinks(graph_model, node, state)
             state.offset = state.offset if not state.update_offset else state.offset + weight.shape[
                 0]
@@ -810,8 +816,8 @@ def find_srcs(graph_model: GraphModule, starting_node: Node,
                     node, state.scale_invariant_function):
             find_sinks(graph_model, node, state)
             find_srcs(graph_model, node, state)
-        elif (node.op == 'call_method' and node.target in _residual_methods or
-              node.op == 'call_function' and node.target in _residual_fns):
+        elif (node.op == 'call_method' and node_target in _residual_methods or
+              node.op == 'call_function' and node_target in _residual_fns):
             state.update_offset = False
             find_sinks(graph_model, node, state)
             find_srcs(graph_model, node, state)
@@ -827,7 +833,7 @@ def find_srcs(graph_model: GraphModule, starting_node: Node,
                 state.update_offset = True
                 find_srcs(graph_model, node, state)
                 state.update_offset = update_offset_state
-        elif node.target in _ignore_ops:
+        elif node_target in _ignore_ops:
             continue
         else:
             # If we meet an unrecognized op, we add None to invalidate the region
@@ -842,23 +848,24 @@ def find_sinks(graph_model: GraphModule, starting_node: Node,
         # we keep a history of how the graph has been walked already, invariant to the direction,
         # to avoid getting stuck in a loop
         # Note that the path is inverted with respect to find_srcs
+        node_target = node.meta.get('orig_target', node.target)
         path = (starting_node, node)
         if path not in state.history:
             state.history.add(path)
         else:
             continue
         if _is_supported_module(graph_model, node, state.supported_sinks):
-            module = get_module(graph_model, node.target)
+            module = get_module(graph_model, node_target)
             weight = get_weight_sink(module)
             eq_indexes = EqualizationIndexes(0, weight.shape[0], state.offset)
-            state.add_sinks(node.target, module, eq_indexes)
+            state.add_sinks(node_target, module, eq_indexes)
 
         elif _is_scale_invariant_module(
                 graph_model, node, state.scale_invariant_layers) or _is_scale_invariant_function(
                     node, state.scale_invariant_function):
             find_sinks(graph_model, node, state)
-        elif (node.op == 'call_method' and node.target in _residual_methods or
-              node.op == 'call_function' and node.target in _residual_fns):
+        elif (node.op == 'call_method' and node_target in _residual_methods or
+              node.op == 'call_function' and node_target in _residual_fns):
             state.update_offset = False
             find_sinks(graph_model, node, state)
             find_srcs(graph_model, node, state)
@@ -894,7 +901,7 @@ def find_sinks(graph_model: GraphModule, starting_node: Node,
                         new_state.get_module_from_name(k),
                         EqualizationIndexes(start, end, new_state.offset))
                 state.srcs.update(new_state.srcs)
-        elif node.target in _ignore_ops:
+        elif node_target in _ignore_ops:
             continue
         else:
             # If we meet an unrecognized op, we add None to invalidate the region
@@ -1268,15 +1275,14 @@ def random_orthogonal_matrix(size):
     return q
 
 
-def _apply_rotate(model: nn.Module, regions: List[Region], partial_rotation_method='had'):
+def _apply_rotate(model: nn.Module, regions: List[Region], full_rotation_method='had'):
     for region in regions:
         insert_rotation_module = len(region.srcs) == 0
 
         if not insert_rotation_module and not region.is_valid:
             continue
         hidden_dim = region.max_shape_sinks
-
-        if not insert_rotation_module and partial_rotation_method == 'ort':
+        if not insert_rotation_module and full_rotation_method == 'ort':
             rot_mat = random_orthogonal_matrix(hidden_dim)
             K = None
             rot_func = _apply_ort_device
@@ -1366,7 +1372,7 @@ class GraphRotationEqualization(RotationEqualization):
             blacklist_layers: Optional[List[str]] = None,
             orphan_sink: bool = False,
             rotate_matmul: bool = False,
-            partial_rotation_method: str = 'had') -> None:
+            full_rotation_method: str = 'had') -> None:
         super(GraphRotationEqualization, self).__init__()
 
         self.supported_srcs = (nn.Linear, nn.Embedding)
@@ -1376,7 +1382,7 @@ class GraphRotationEqualization(RotationEqualization):
         self.blacklist_layers = blacklist_layers
         self.orphan_sink = orphan_sink
         self.rotate_matmul = rotate_matmul
-        self.partial_rotation_method = partial_rotation_method
+        self.full_rotation_method = full_rotation_method
 
     def rotate_matmuls(self, graph_module):
         matmul_nodes = list(graph_module.graph.nodes)
@@ -1420,7 +1426,7 @@ class GraphRotationEqualization(RotationEqualization):
         if self.rotate_matmul:
             self.rotate_matmuls(graph_model)
         if len(regions) > 0:
-            _apply_rotate(graph_model, regions, self.partial_rotation_method)
+            _apply_rotate(graph_model, regions, self.full_rotation_method)
 
         return graph_model
 
