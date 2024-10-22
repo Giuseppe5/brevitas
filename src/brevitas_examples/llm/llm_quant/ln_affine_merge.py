@@ -6,12 +6,10 @@ SPDX-License-Identifier: MIT
 import torch
 from torch import nn
 
-# from brevitas.graph.equalize import _is_reshaping_op
 from brevitas.graph.base import ModuleToModuleByClass
 from brevitas.graph.equalize import _is_scale_invariant_module
 from brevitas.graph.equalize import MergeLnAffine
 from brevitas.graph.utils import get_module
-from brevitas_examples.llm.llm_quant.run_utils import cast_to_float32
 
 
 def replace_rmsnorm_with_torch(model, config):

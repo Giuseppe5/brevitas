@@ -16,6 +16,7 @@ Set the env variable BREVITAS_JIT=1 to speed up the quantization process. Curren
 ```bash
 usage: main.py [-h] [--model MODEL] [--seed SEED] [--nsamples NSAMPLES]
                [--seqlen SEQLEN] [--eval] [--dataset {wikitext2,c4}]
+               [--gpxq-block-name GPXQ_BLOCK_NAME]
                [--weight-bit-width WEIGHT_BIT_WIDTH]
                [--weight-param-method {stats,mse,hqo}]
                [--weight-scale-precision {float_scale,po2_scale}]
@@ -34,10 +35,13 @@ usage: main.py [-h] [--model MODEL] [--seed SEED] [--nsamples NSAMPLES]
                [--input-quant-granularity {per_tensor,per_row,per_group}]
                [--input-group-size INPUT_GROUP_SIZE]
                [--quantize-input-zero-point] [--quantize-last-layer] [--gptq]
-               [--act-calibration] [--bias-corr] [--ln-affine-merge]
-               [--no-quantize] [--no-float16] [--replace-mha]
-               [--weight-equalization]
-               [--act-equalization {None,layerwise,fx}] [--load-awq LOAD_AWQ]
+               [--gpfq] [--gpxq-act-order] [--gpxq-use-quant-activations]
+               [--gpxq-create-weight-orig] [--act-calibration] [--bias-corr]
+               [--ln-affine-merge] [--replace-rmsnorm] [--no-quantize]
+               [--no-float16] [--replace-mha] [--weight-equalization]
+               [--graph-rotation] [--graph-rotation-mode {had,ort}]
+               [--layerwise-rotation] [--act-equalization {None,layerwise,fx}]
+               [--load-awq LOAD_AWQ]
                [--export-target {None,onnx_qcdq,torch_qcdq,sharded_torchmlir_group_weight,sharded_packed_torchmlir_group_weight}]
                [--export-prefix EXPORT_PREFIX]
                [--checkpoint-name CHECKPOINT_NAME] [--fuse-sequences]
@@ -50,7 +54,10 @@ options:
   --seqlen SEQLEN       Sequence length. Default: 2048.
   --eval                Eval model PPL on the chosen Dataset.
   --dataset {wikitext2,c4}
-                        Dataset to use for quantization (default: wikitext2)
+                        Dataset to use for quantization (default: c4)
+  --gpxq-block-name GPXQ_BLOCK_NAME
+                        Block name for faster GPxQ optimization. It works only
+                        if FX is not needed (default: None)
   --weight-bit-width WEIGHT_BIT_WIDTH
                         Weight bit width. Default: 8.
   --weight-param-method {stats,mse,hqo}
@@ -105,9 +112,16 @@ options:
   --quantize-last-layer
                         Quantize last nn.Linear layer.
   --gptq                Apply GPTQ.
+  --gpfq                Apply GPFQ.
+  --gpxq-act-order      Apply GPXQ activation ordering.
+  --gpxq-use-quant-activations
+                        Use quantized activations in GPXQ.
+  --gpxq-create-weight-orig
+                        Create weight_orig in GPXQ.
   --act-calibration     Apply activation calibration.
   --bias-corr           Apply bias correction.
   --ln-affine-merge     Merge LN affine params.
+  --replace-rmsnorm     Replace HF RMSNorms with Torch one.
   --no-quantize         Disable quantization.
   --no-float16          Disable float16 as base datatype and switch to
                         float32.
@@ -116,6 +130,12 @@ options:
   --weight-equalization
                         Apply weight equalization. Relevant to ReLU based
                         models (e.g. OPT).
+  --graph-rotation      Apply graph rotation equalization
+  --graph-rotation-mode {had,ort}
+                        If GraphRotation is enabled, decide how to compute the
+                        random rotation matrix that is fully fused. Online or
+                        partial rotation will always be Hadamard
+  --layerwise-rotation  Apply layerwise rotation equalization
   --act-equalization {None,layerwise,fx}
                         Apply activation equalization (SmoothQuant). Layerwise
                         introduces standalone mul nodes,while fx merges them

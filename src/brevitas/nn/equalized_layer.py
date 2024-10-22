@@ -73,18 +73,6 @@ class RotatedModule(torch.nn.Module):
             inp = matmul_hadU_cuda(inp, had_K, K)
         else:
             inp = matmul_hadU(inp)
-        # shape = inp.shape
-        # n = inp.shape[-1]
-        # if self.k == 1:
-        #     inp = fast_hadamard_transform.hadamard_transform(inp.contiguous(), 1.0/torch.tensor(n).sqrt())
-        #     o = self.layer(inp)
-
-        # # if transpose:
-        # #     hadK = hadK.T.contiguous()
-        # inp = inp.view(*inp.shape[:-1], self.k, n // self.k)
-        # inp = fast_hadamard_transform.hadamard_transform(inp.contiguous(), 1.0/torch.tensor(n).sqrt())
-        # inp = self.had_mat.to(inp.device).to(inp.dtype) @ inp
-        # inp = inp.reshape(shape)
         o = self.layer(inp)
 
         return o

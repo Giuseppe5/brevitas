@@ -125,13 +125,6 @@ class WeightBiasWrapper:
 
 # Required for being hashable
 @dataclass(eq=True, frozen=True)
-class FunctionalNodeReference:
-    node: Node = None
-    args_index: int = None
-
-
-# Required for being hashable
-@dataclass(eq=True, frozen=True)
 class Region:
     srcs: Dict = field(default_factory=dict)
     sinks: Dict = field(default_factory=dict)
@@ -1271,7 +1264,7 @@ def random_orthogonal_matrix(size):
     torch.cuda.empty_cache()
     random_matrix = torch.randn(size, size, dtype=torch.float64)
     q, r = torch.linalg.qr(random_matrix)
-    q *= torch.sign(torch.diag(r)).unsqueeze(0)
+    q *= torch.sign(torch.diag(r)).unsqueeze(0).float()
     return q
 
 
@@ -1340,6 +1333,31 @@ def _apply_rotate(model: nn.Module, regions: List[Region], full_rotation_method=
                 rewriter = ModuleInstanceToModuleInstance(
                     module, RotatedModule(had_mat=rot_mat, k=K, layer=module))
                 rewriter.apply(model)
+
+
+def _replace_bias(next_module, new_bias):
+    new_bias = new_bias.view(-1)
+    if next_module.bias is not None:
+        next_module.bias.data.copy_(new_bias)
+    else:
+        new_bias = new_bias.to(next_module.weight.device).to(next_module.weight.dtype)
+        next_module.register_parameter('bias', nn.Parameter(new_bias))
+
+
+def _merge_ln(layer_norm, next_module, scale_bias_by_weight):
+    view_shape = (1, -1)
+    # Merge weight
+    if scale_bias_by_weight and hasattr(layer_norm, 'bias'):
+        layer_norm.bias.data /= layer_norm.weight.data
+    # We can't do an inplace update as some layers we merge into like lm_head might share the weight tensor
+    scale = layer_norm.weight.data.view(view_shape).expand_as(next_module.weight)
+    next_module.weight = nn.Parameter(next_module.weight.clone() * scale)
+
+    # Merge bias, new_bias includes the bias of next_module by going through its fwd
+    if hasattr(layer_norm, 'bias'):
+        inp = layer_norm.bias.data.view(view_shape)
+        new_bias = next_module(inp)
+        _replace_bias(next_module, new_bias)
 
 
 class RotationEqualization(GraphTransform):
@@ -1429,31 +1447,6 @@ class GraphRotationEqualization(RotationEqualization):
             _apply_rotate(graph_model, regions, self.full_rotation_method)
 
         return graph_model
-
-
-def _replace_bias(next_module, new_bias):
-    new_bias = new_bias.view(-1)
-    if next_module.bias is not None:
-        next_module.bias.data.copy_(new_bias)
-    else:
-        new_bias = new_bias.to(next_module.weight.device).to(next_module.weight.dtype)
-        next_module.register_parameter('bias', nn.Parameter(new_bias))
-
-
-def _merge_ln(layer_norm, next_module, scale_bias_by_weight):
-    view_shape = (1, -1)
-    # Merge weight
-    if scale_bias_by_weight and hasattr(layer_norm, 'bias'):
-        layer_norm.bias.data /= layer_norm.weight.data
-    # We can't do an inplace update as some layers we merge into like lm_head might share the weight tensor
-    scale = layer_norm.weight.data.view(view_shape).expand_as(next_module.weight)
-    next_module.weight = nn.Parameter(next_module.weight.clone() * scale)
-
-    # Merge bias, new_bias includes the bias of next_module by going through its fwd
-    if hasattr(layer_norm, 'bias'):
-        inp = layer_norm.bias.data.view(view_shape)
-        new_bias = next_module(inp)
-        _replace_bias(next_module, new_bias)
 
 
 class MergeLnAffine(GraphTransform):
