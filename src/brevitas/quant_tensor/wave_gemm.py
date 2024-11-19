@@ -9,7 +9,8 @@ from iree.turbine.kernel.wave.utils import get_mfma_load_elems_per_thread
 from iree.turbine.kernel.wave.utils import get_mfma_store_elems_per_thread
 import torch
 
-
+from iree.turbine.kernel.wave.constraints import MMAType
+MMA = MMAType.F32_32x32x8_F16
 def batched_gemm(a, b):
     # Input sizes
     B = tkl.sym.B
@@ -37,7 +38,7 @@ def batched_gemm(a, b):
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64, waves_per_block=(2, 2, 1), vector_shapes={B: 0})]
+            threads_per_wave=64, waves_per_block=(2, 2, 1), vector_shapes={B: 0}, mma_type=MMA)]
 
     @tkw.wave(constraints)
     def batched_gemm(
@@ -50,29 +51,32 @@ def batched_gemm(a, b):
         @tkw.reduction(K, init_args=[c_reg])
         def repeat(acc: tkl.Register[B, M, N, tkl.f32]) -> tkl.Register[B, M, N, tkl.f32]:
             a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+            #a_reg = tkw.cast(a_reg, tkl.f8e4m3fnuz)
             b_reg = tkw.read(b, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+
+            #b_reg = tkw.cast(b_reg, tkl.f8e4m3fnuz)
             acc = tkw.mma(a_reg, b_reg, acc)
             return acc
 
         tkw.write(repeat, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
 
     batch = a.shape[0]
-    first_dim = a.shape[1]
-    shared_dim = a.shape[2]
-    second_dim = b.shape[1]
+    first_dim = a.shape[-2]
+    shared_dim = a.shape[-1]
+    second_dim = b.shape[-2]
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        LOAD_ELEMS_PER_THREAD: 4,
-        STORE_ELEMS_PER_THREAD: 4,
+        LOAD_ELEMS_PER_THREAD: get_mfma_load_elems_per_thread(MMA),
+        STORE_ELEMS_PER_THREAD: get_mfma_store_elems_per_thread(MMA),
         BLOCK_B: 1,
         BLOCK_M: 64,
         BLOCK_N: 64,
         BLOCK_K: 32,
-        B: shape[0],
-        M: shape[1],
-        N: shape[2],
-        K: shape[3],
+        B: batch,
+        M: first_dim,
+        N: second_dim,
+        K: shared_dim,
         READ_SHARED_DELAY: 1,
         WRITE_SHARED_DELAY: 1,
         READ_GLOBAL_DELAY: 2,
@@ -94,7 +98,6 @@ def batched_gemm(a, b):
     #     config["benchmark_results_file"] = os.path.join(
     #         dump_perf, "tk_" + perf_filename
     #     )
-
     with tk.gen.TestLaunchContext(
             hyperparams,
             canonicalize=True,
@@ -108,7 +111,6 @@ def batched_gemm(a, b):
         # b = device_randn(shape[0], shape[2], shape[3], dtype=torch.float16)
         c = device_zeros(batch, first_dim, second_dim, dtype=torch.float32)
         mb = batched_gemm(a, b, c)
-
         # if test_dump_generated_mlir:
         #     filename = f"wave_batched_gemm_{'x'.join(map(str, shape))}.mlir"
         #     with open(filename, "w") as f:
@@ -122,4 +124,12 @@ def batched_gemm(a, b):
         # iree_ref = torch.zeros(shape[0], shape[1], shape[2], dtype=torch.float32)
         # generate_iree_ref("bmmt", [a, b], [iree_ref], config, run_bench=run_bench)
         # assert_close(c, iree_ref, check_device=False)
-    return mb
+    return c
+
+a = torch.randn(1, 768, 768, dtype=torch.float16).cuda()
+b = torch.randn(1, 768, 768, dtype=torch.float16).cuda()
+batched_gemm(a,b)
+for _ in range(1):
+    batched_gemm(a,b)
+# print(torch.bmm(a,b.transpose(1,2)))
+
