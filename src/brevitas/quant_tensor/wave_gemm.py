@@ -1,0 +1,125 @@
+import iree.turbine.kernel as tk
+import iree.turbine.kernel.lang as tkl
+from iree.turbine.kernel.lang.global_symbols import *
+import iree.turbine.kernel.wave as tkw
+from iree.turbine.kernel.wave.utils import device_randn
+from iree.turbine.kernel.wave.utils import device_zeros
+from iree.turbine.kernel.wave.utils import get_default_run_config
+from iree.turbine.kernel.wave.utils import get_mfma_load_elems_per_thread
+from iree.turbine.kernel.wave.utils import get_mfma_store_elems_per_thread
+import torch
+
+
+def batched_gemm(a, b):
+    # Input sizes
+    B = tkl.sym.B
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    # Workgroup tile sizes
+    BLOCK_B = tkl.sym.BLOCK_B
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    # Other hyperparameters
+    LOAD_ELEMS_PER_THREAD = tkl.sym.LOAD_ELEMS_PER_THREAD
+    STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
+
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64, waves_per_block=(2, 2, 1), vector_shapes={B: 0})]
+
+    @tkw.wave(constraints)
+    def batched_gemm(
+        a: tkl.Memory[B, M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[B, N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[B, M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[B, M, N, tkl.f32](0.0)
+
+        @tkw.reduction(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[B, M, N, tkl.f32]) -> tkl.Register[B, M, N, tkl.f32]:
+            a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+            b_reg = tkw.read(b, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    batch = a.shape[0]
+    first_dim = a.shape[1]
+    shared_dim = a.shape[2]
+    second_dim = b.shape[1]
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        LOAD_ELEMS_PER_THREAD: 4,
+        STORE_ELEMS_PER_THREAD: 4,
+        BLOCK_B: 1,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+        B: shape[0],
+        M: shape[1],
+        N: shape[2],
+        K: shape[3],
+        READ_SHARED_DELAY: 1,
+        WRITE_SHARED_DELAY: 1,
+        READ_GLOBAL_DELAY: 2,
+        WRITE_GLOBAL_DELAY: 2,
+        MMA_DELAY: 1,
+        VALU_DELAY: 1,
+        SHUFFLE_DELAY: 1,
+        SHARED_MEMORY_UNITS: 4,
+        GLOBAL_MEMORY_UNITS: 4,
+        MMA_UNITS: 4,
+        VALU_UNITS: 8,
+        SHUFFLE_UNITS: 8,}
+    config = get_default_run_config()
+    # if run_bench:
+    #     config["benchmark_batch_size"] = 10
+    #     config["benchmark_repetitions"] = 3
+    # if dump_perf is not None:
+    #     perf_filename = request.node.name + ".json"
+    #     config["benchmark_results_file"] = os.path.join(
+    #         dump_perf, "tk_" + perf_filename
+    #     )
+
+    with tk.gen.TestLaunchContext(
+            hyperparams,
+            canonicalize=True,
+            run=True,
+            run_bench=False,
+            run_config=config,
+            schedule=False,
+            use_scheduling_barriers=False,
+    ):
+        # a = device_randn(shape[0], shape[1], shape[3], dtype=torch.float16)
+        # b = device_randn(shape[0], shape[2], shape[3], dtype=torch.float16)
+        c = device_zeros(batch, first_dim, second_dim, dtype=torch.float32)
+        mb = batched_gemm(a, b, c)
+
+        # if test_dump_generated_mlir:
+        #     filename = f"wave_batched_gemm_{'x'.join(map(str, shape))}.mlir"
+        #     with open(filename, "w") as f:
+        #         f.write(mb.module_op.get_asm())
+
+        # if run_bench:
+        #     if dump_perf is not None:
+        #         config["benchmark_results_file"] = os.path.join(
+        #             dump_perf, "iree_" + perf_filename
+        #         )
+        # iree_ref = torch.zeros(shape[0], shape[1], shape[2], dtype=torch.float32)
+        # generate_iree_ref("bmmt", [a, b], [iree_ref], config, run_bench=run_bench)
+        # assert_close(c, iree_ref, check_device=False)
+    return mb
