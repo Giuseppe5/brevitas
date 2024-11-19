@@ -4,6 +4,7 @@ from typing import Callable
 import warnings
 
 import torch
+from torch import is_grad_enabled
 from torch import Tensor
 import torch.nn.functional as F
 
@@ -69,7 +70,20 @@ def conv_transpose3d_handler(quant_input, quant_weight, bias=None, *args, **kwar
 
 @implements_int_qt(F.linear)
 def linear_handler(quant_input, quant_weight, bias=None, *args, **kwargs):
-    output = quant_layer(F.linear, quant_input, quant_weight, bias, *args, **kwargs)
+    from brevitas.quant_tensor import _unpack_quant_tensor
+    from brevitas.quant_tensor.wave_gemm import batched_gemm
+
+    if torch.is_grad_enabled():
+        output = quant_layer(F.linear, quant_input, quant_weight, bias, *args, **kwargs)
+    else:
+        value_quant_input = _unpack_quant_tensor(quant_input)
+        output = batched_gemm(
+            value_quant_input,
+            _unpack_quant_tensor(quant_weight).unsqueeze(0).repeat(value_quant_input.shape[0]))
+        if bias is not None:
+            output += _unpack_quant_tensor(bias)
+        output = quant_layer(
+            F.linear, quant_input, quant_weight, bias, *args, output=output, **kwargs)
     return output
 
 
@@ -138,7 +152,7 @@ def adaptive_avg_pool2d_handler(quant_input, output_shape):
     return quant_input
 
 
-def quant_layer(fn, quant_input, quant_weight, bias, *args, **kwargs):
+def quant_layer(fn, quant_input, quant_weight, bias, *args, output=None, **kwargs):
     from brevitas.quant_tensor import _unpack_quant_tensor
     from brevitas.quant_tensor import IntQuantTensor
 
@@ -151,20 +165,21 @@ def quant_layer(fn, quant_input, quant_weight, bias, *args, **kwargs):
     compute_output_quant_tensor = isinstance(quant_input, IntQuantTensor) and isinstance(
         quant_weight, IntQuantTensor)
 
-    if bias is None:
-        output = fn(
-            _unpack_quant_tensor(quant_input),
-            _unpack_quant_tensor(quant_weight),
-            None,
-            *args,
-            **kwargs)
-    else:
-        output = fn(
-            _unpack_quant_tensor(quant_input),
-            _unpack_quant_tensor(quant_weight),
-            _unpack_quant_tensor(bias),
-            *args,
-            **kwargs)
+    if output is None:
+        if bias is None:
+            output = fn(
+                _unpack_quant_tensor(quant_input),
+                _unpack_quant_tensor(quant_weight),
+                None,
+                *args,
+                **kwargs)
+        else:
+            output = fn(
+                _unpack_quant_tensor(quant_input),
+                _unpack_quant_tensor(quant_weight),
+                _unpack_quant_tensor(bias),
+                *args,
+                **kwargs)
 
     if isinstance(quant_input, IntQuantTensor) and isinstance(quant_weight, IntQuantTensor):
         output_bit_width = max_acc_bit_width(
