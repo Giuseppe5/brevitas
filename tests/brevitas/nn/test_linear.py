@@ -41,16 +41,19 @@ class TestQuantLinearInit:
 
 class TestQuantLinearFwd:
 
+    @torch.no_grad()
     def test_forward_defaults(self):
-        mod = QuantLinear(out_features=OUTPUT_FEATURES, in_features=INPUT_FEATURES, bias=True)
-        x = torch.rand(size=(3, INPUT_FEATURES))
+        mod = QuantLinear(out_features=OUTPUT_FEATURES, in_features=INPUT_FEATURES, bias=True).cuda().to(torch.float16)
+        x = torch.rand(size=(1, 3, INPUT_FEATURES)).cuda().to(torch.float16)
         assert mod(x) is not None
 
+    @torch.no_grad()
     def test_forward_bias_fp(self):
         mod = QuantLinear(out_features=OUTPUT_FEATURES, in_features=INPUT_FEATURES, bias=True)
         x = torch.rand(size=(3, INPUT_FEATURES))
         assert mod(x) is not None
 
+    @torch.no_grad()
     def test_forward_bias_int(self):
         mod = QuantLinear(
             out_features=OUTPUT_FEATURES,

@@ -73,13 +73,14 @@ def linear_handler(quant_input, quant_weight, bias=None, *args, **kwargs):
     from brevitas.quant_tensor import _unpack_quant_tensor
     from brevitas.quant_tensor.wave_gemm import batched_gemm
 
-    if torch.is_grad_enabled():
+    value_quant_input = _unpack_quant_tensor(quant_input)
+    value_quant_weight = _unpack_quant_tensor(quant_weight)
+    if (torch.is_grad_enabled() or 'cpu' in str(value_quant_input.device) or 'cpu' in str(value_quant_weight.device)) or torch.version.hip is None:
         output = quant_layer(F.linear, quant_input, quant_weight, bias, *args, **kwargs)
     else:
-        value_quant_input = _unpack_quant_tensor(quant_input)
         output = batched_gemm(
             value_quant_input,
-            _unpack_quant_tensor(quant_weight).unsqueeze(0).repeat(value_quant_input.shape[0]))
+            _unpack_quant_tensor(quant_weight).unsqueeze(0).repeat(value_quant_input.shape[0], 1, 1))
         if bias is not None:
             output += _unpack_quant_tensor(bias)
         output = quant_layer(
