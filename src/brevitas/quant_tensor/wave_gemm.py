@@ -2,6 +2,7 @@ import iree.turbine.kernel as tk
 import iree.turbine.kernel.lang as tkl
 from iree.turbine.kernel.lang.global_symbols import *
 import iree.turbine.kernel.wave as tkw
+from iree.turbine.kernel.wave.constraints import MMAType
 from iree.turbine.kernel.wave.utils import device_randn
 from iree.turbine.kernel.wave.utils import device_zeros
 from iree.turbine.kernel.wave.utils import get_default_run_config
@@ -9,9 +10,17 @@ from iree.turbine.kernel.wave.utils import get_mfma_load_elems_per_thread
 from iree.turbine.kernel.wave.utils import get_mfma_store_elems_per_thread
 import torch
 
-from iree.turbine.kernel.wave.constraints import MMAType
-MMA = MMAType.F32_32x32x8_F16
-def batched_gemm(a, b):
+dtype_dict = {
+    'F16': {
+        'MMA': MMAType.F32_32x32x8_F16, 'input_dtype': tkl.f16, 'output_dtype': tkl.f32},
+    'I8': {
+        'MMA': MMAType.F32_32x32x8_I8, 'input_dtype': tkl.i8, 'output_dtype': tkl.i32},}
+
+
+def batched_gemm(a, b, kwargs):
+    MMA = kwargs['MMA']
+    input_dtype = kwargs['input_dtype']
+    output_dtype = kwargs['output_dtype']
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -42,14 +51,14 @@ def batched_gemm(a, b):
 
     @tkw.wave(constraints)
     def batched_gemm(
-        a: tkl.Memory[B, M, K, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[B, N, K, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[B, M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        a: tkl.Memory[B, M, K, ADDRESS_SPACE, input_dtype],
+        b: tkl.Memory[B, N, K, ADDRESS_SPACE, input_dtype],
+        c: tkl.Memory[B, M, N, GLOBAL_ADDRESS_SPACE, output_dtype],
     ):
-        c_reg = tkl.Register[B, M, N, tkl.f32](0.0)
+        c_reg = tkl.Register[B, M, N, output_dtype](0.0)
 
         @tkw.reduction(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[B, M, N, tkl.f32]) -> tkl.Register[B, M, N, tkl.f32]:
+        def repeat(acc: tkl.Register[B, M, N, output_dtype]) -> tkl.Register[B, M, N, output_dtype]:
             a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
             #a_reg = tkw.cast(a_reg, tkl.f8e4m3fnuz)
             b_reg = tkw.read(b, elements_per_thread=LOAD_ELEMS_PER_THREAD)
@@ -107,29 +116,16 @@ def batched_gemm(a, b):
             schedule=False,
             use_scheduling_barriers=False,
     ):
-        # a = device_randn(shape[0], shape[1], shape[3], dtype=torch.float16)
-        # b = device_randn(shape[0], shape[2], shape[3], dtype=torch.float16)
+
         c = device_zeros(batch, first_dim, second_dim, dtype=torch.float32)
         mb = batched_gemm(a, b, c)
-        # if test_dump_generated_mlir:
-        #     filename = f"wave_batched_gemm_{'x'.join(map(str, shape))}.mlir"
-        #     with open(filename, "w") as f:
-        #         f.write(mb.module_op.get_asm())
 
-        # if run_bench:
-        #     if dump_perf is not None:
-        #         config["benchmark_results_file"] = os.path.join(
-        #             dump_perf, "iree_" + perf_filename
-        #         )
-        # iree_ref = torch.zeros(shape[0], shape[1], shape[2], dtype=torch.float32)
-        # generate_iree_ref("bmmt", [a, b], [iree_ref], config, run_bench=run_bench)
-        # assert_close(c, iree_ref, check_device=False)
     return c
+
 
 a = torch.randn(1, 768, 768, dtype=torch.float16).cuda()
 b = torch.randn(1, 768, 768, dtype=torch.float16).cuda()
-batched_gemm(a,b)
+batched_gemm(a, b)
 for _ in range(1):
-    batched_gemm(a,b)
+    batched_gemm(a, b)
 # print(torch.bmm(a,b.transpose(1,2)))
-
