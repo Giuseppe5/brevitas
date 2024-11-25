@@ -12,15 +12,16 @@ import torch
 
 dtype_dict = {
     'F16': {
-        'MMA': MMAType.F32_32x32x8_F16, 'input_dtype': tkl.f16, 'output_dtype': tkl.f32},
+        'MMA': MMAType.F32_32x32x8_F16, 'input_dtype': tkl.f16, 'output_dtype': tkl.f32, 'torch_output_dtype': torch.float32},
     'I8': {
-        'MMA': MMAType.F32_32x32x8_I8, 'input_dtype': tkl.i8, 'output_dtype': tkl.i32},}
+        'MMA': MMAType.I32_32x32x8_I8, 'input_dtype': tkl.i8, 'output_dtype': tkl.i32, 'torch_output_dtype': torch.int32},}
 
 
 def batched_gemm(a, b, kwargs):
     MMA = kwargs['MMA']
     input_dtype = kwargs['input_dtype']
     output_dtype = kwargs['output_dtype']
+    torch_output_dtype = kwargs['torch_output_dtype']
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -117,7 +118,7 @@ def batched_gemm(a, b, kwargs):
             use_scheduling_barriers=False,
     ):
 
-        c = device_zeros(batch, first_dim, second_dim, dtype=torch.float32)
+        c = device_zeros(batch, first_dim, second_dim).to(torch_output_dtype)
         mb = batched_gemm(a, b, c)
 
     return c
