@@ -3,12 +3,13 @@
 
 import argparse
 from copy import deepcopy
+from datetime import timedelta
 import functools
 import sys
 from warnings import warn
 
-from lm_eval import evaluator
-from lm_eval.models.huggingface import HFLM
+# from lm_eval import evaluator
+# from lm_eval.models.huggingface import HFLM
 import numpy as np
 from optimum.exporters.onnx import onnx_export_from_model
 import torch
@@ -484,27 +485,66 @@ def quantize_llm(args):
         print(f"Quantized perplexity ({args.dataset}): {quant_ppl:.3f}")
 
     if args.few_shot_eval:
+        import lighteval
+        from lighteval.logging.evaluation_tracker import EvaluationTracker
+        from lighteval.models.vllm.vllm_model import VLLMModelConfig
+        from lighteval.models.transformers.transformers_model import TransformersModelConfig
+        from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
+        from lighteval.utils.utils import EnvConfig
+        from lighteval.utils.imports import is_accelerate_available
+        from accelerate import Accelerator, InitProcessGroupKwargs
+        accelerator = Accelerator(kwargs_handlers=[InitProcessGroupKwargs(timeout=timedelta(seconds=3000))])
+        evaluation_tracker = EvaluationTracker(
+            output_dir="./results",
+            save_details=True,
+
+            )
+        pipeline_params = PipelineParameters(
+            launcher_type=ParallelismManager.ACCELERATE,
+            env_config=EnvConfig(cache_dir="/scratch/hf_models/"),
+            # Remove the 2 parameters below once your configuration is tested
+            override_batch_size=1,
+            max_samples=10
+        )
+        task = "helm|mmlu|5|1"
+        model_config = TransformersModelConfig(
+                pretrained=args.model,
+                dtype="float16",
+                use_chat_template=True,
+                model_parallel=True,
+                accelerator=accelerator
+        )
+        # model_config.model = model
+        pipeline = Pipeline(
+            tasks=task,
+            pipeline_parameters=pipeline_params,
+            evaluation_tracker=evaluation_tracker,
+            model=model,
+            config=model_config
+        )
+
         with torch.no_grad(), quant_inference_mode(model):
             model(**calibration_loader[0])
             if args.few_shot_compile:
                 remove_hooks(model)
                 model.cuda()
                 model = torch.compile(model)
-
-            wrapped_model = HFLM(pretrained=model)  # need to wrap for LLM eval
-            results = evaluator.simple_evaluate(
-                model=wrapped_model,
-                model_args=None,
-                tasks=list(args.few_shot_tasks),
-                device='cuda:0',
-                limit=args.few_shot_limit,
-                num_fewshot=0 if args.few_shot_zeroshot else None,
-                log_samples=False,
-                batch_size=None,
-                verbosity="ERROR")
-        results = filter_results(results, args.few_shot_tasks)
-        print("Few shot eval results")
-        print(results)
+            pipeline.evaluate()
+            pipeline.show_results()
+        #     wrapped_model = HFLM(pretrained=model)  # need to wrap for LLM eval
+        #     results = evaluator.simple_evaluate(
+        #         model=wrapped_model,
+        #         model_args=None,
+        #         tasks=list(args.few_shot_tasks),
+        #         device='cuda:0',
+        #         limit=args.few_shot_limit,
+        #         num_fewshot=0 if args.few_shot_zeroshot else None,
+        #         log_samples=False,
+        #         batch_size=None,
+        #         verbosity="ERROR")
+        # results = filter_results(results, args.few_shot_tasks)
+        # print("Few shot eval results")
+        # print(results)
     remove_hooks(model)
 
     if args.checkpoint_name is not None:
