@@ -13,14 +13,16 @@ class GroupwiseWeightQuantProxyFromInjector(WeightQuantProxyFromInjector):
     def __init__(self, quant_layer: nn.Module, quant_injector: Injector) -> None:
         super().__init__(quant_layer, quant_injector)
         self.cache_class = _CachedIOGroupwiseInt
+        self.group_dim = self.quant_injector.group_dim
+        self.group_size = self.quant_injector.group_size
 
-    @property
-    def group_dim(self):
-        return self.quant_injector.group_dim
+    # @property
+    # def group_dim(self):
+    #     return
 
-    @property
-    def group_size(self):
-        return self.quant_injector.group_size
+    # @property
+    # def group_size(self):
+    #     return self.quant_injector.group_size
 
     def apply_input_view(self, x):
         x = super().apply_input_view(x)

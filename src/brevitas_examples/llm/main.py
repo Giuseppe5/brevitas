@@ -523,7 +523,7 @@ def quantize_llm(args):
             if args.few_shot_compile:
                 remove_hooks(model)
                 model.cuda()
-                model = torch.compile(model)
+                model.forward = torch.compile(model.forward, fullgraph=True)
             pipeline = Pipeline(
                 tasks=task,
                 pipeline_parameters=pipeline_params,
