@@ -485,43 +485,38 @@ def quantize_llm(args):
         print(f"Quantized perplexity ({args.dataset}): {quant_ppl:.3f}")
 
     if args.few_shot_eval:
+        from accelerate import Accelerator
+        from accelerate import InitProcessGroupKwargs
         import lighteval
         from lighteval.logging.evaluation_tracker import EvaluationTracker
-        from lighteval.models.vllm.vllm_model import VLLMModelConfig
         from lighteval.models.transformers.transformers_model import TransformersModelConfig
-        from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
-        from lighteval.utils.utils import EnvConfig
+        from lighteval.models.vllm.vllm_model import VLLMModelConfig
+        from lighteval.pipeline import ParallelismManager
+        from lighteval.pipeline import Pipeline
+        from lighteval.pipeline import PipelineParameters
         from lighteval.utils.imports import is_accelerate_available
-        from accelerate import Accelerator, InitProcessGroupKwargs
-        accelerator = Accelerator(kwargs_handlers=[InitProcessGroupKwargs(timeout=timedelta(seconds=3000))])
+        from lighteval.utils.utils import EnvConfig
+        accelerator = Accelerator(
+            kwargs_handlers=[InitProcessGroupKwargs(timeout=timedelta(seconds=3000))])
         evaluation_tracker = EvaluationTracker(
             output_dir="./results",
             save_details=True,
-
-            )
+        )
         pipeline_params = PipelineParameters(
             launcher_type=ParallelismManager.ACCELERATE,
             env_config=EnvConfig(cache_dir="/scratch/hf_models/"),
             # Remove the 2 parameters below once your configuration is tested
-            override_batch_size=1,
-            max_samples=10
+            override_batch_size=0,  # max_samples=10
         )
-        task = "helm|mmlu|5|1"
+        task = "leaderboard|gsm8k|5|1"
         model_config = TransformersModelConfig(
-                pretrained=args.model,
-                dtype="float16",
-                use_chat_template=True,
-                model_parallel=True,
-                accelerator=accelerator
-        )
+            pretrained=args.model,
+            dtype="float16",
+            use_chat_template=True,
+            model_parallel=True,
+            accelerator=accelerator,
+            compile=False)
         # model_config.model = model
-        pipeline = Pipeline(
-            tasks=task,
-            pipeline_parameters=pipeline_params,
-            evaluation_tracker=evaluation_tracker,
-            model=model,
-            config=model_config
-        )
 
         with torch.no_grad(), quant_inference_mode(model):
             model(**calibration_loader[0])
@@ -529,6 +524,13 @@ def quantize_llm(args):
                 remove_hooks(model)
                 model.cuda()
                 model = torch.compile(model)
+            pipeline = Pipeline(
+                tasks=task,
+                pipeline_parameters=pipeline_params,
+                evaluation_tracker=evaluation_tracker,
+                model=model,
+                config=model_config)
+
             pipeline.evaluate()
             pipeline.show_results()
         #     wrapped_model = HFLM(pretrained=model)  # need to wrap for LLM eval
