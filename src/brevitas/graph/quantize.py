@@ -38,6 +38,43 @@ from brevitas.quant import Uint8ActPerTensorFloat
 from brevitas.quant import Uint8ActPerTensorFloatMaxInit
 from brevitas.quant.scaled_int import Int8WeightPerTensorFloat
 
+#     class functional_quantization_mode(TorchFunctionMode):
+
+#         def __init__(self, model: torch.nn.Module, quant_map: Dict, enabled: bool = True):
+#             super().__init__()
+#             self.quant_map = quant_map
+#             self.model = model
+#             self.enabled = enabled
+#             self.max_count = 0
+#             self.model.index = 0
+#             def hook(module, out):
+#                 self.model.index = 0
+#             model.register_forward_hook(hook)
+#             self.model.dict = torch.nn.ModuleList()
+#             self.check_func = list(quant_map.keys())[0]
+#             self.check_module = list(quant_map.values())[0]
+
+#             for stateless_function, stateless_module in quant_map.items():
+#                 if not hasattr(model, str(stateless_function)):
+#                     model.add_module(str(stateless_function), stateless_module())
+
+#         def __torch_function__(self, func, types, args=(), kwargs=None):
+            
+#             if kwargs is None:
+#                 kwargs = dict()
+#             if str(func) == self.check_func and self.model.index in self.model.dict:
+#             # if hasattr(self.model, str(func)) and self.enabled:
+#                 module = self.model.dict[self.model.index]#getattr(self.model, str(func))
+#                 out = module(*args, **kwargs)
+#                 self.model.index += 1
+#             elif str(func) == str(self.check_func):
+#                 self.model.dict.append(self.check_module)
+#                 module = self.model.dict[self.model.index]#getattr(self.model, str(func))
+#                 out = module(*args, **kwargs)
+#                 self.model.index += 1
+#             else:
+#                 out = func(*args, **kwargs)
+
 if torch_version >= version.parse('1.12'):
     from torch.overrides import TorchFunctionMode
 
@@ -53,6 +90,7 @@ if torch_version >= version.parse('1.12'):
                     model.add_module(str(stateless_function), stateless_module())
 
         def __torch_function__(self, func, types, args=(), kwargs=None):
+            
             if kwargs is None:
                 kwargs = dict()
 

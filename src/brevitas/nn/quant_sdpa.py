@@ -119,6 +119,71 @@ class ScaledDotProductAttention(Module):
             is_causal=is_causal,
             **kwargs)
 
+from iree.turbine.kernel.wave.utils.general_utils import (
+    get_default_scheduling_params,
+)
+from iree.turbine.kernel.wave.utils.run_utils import (
+    set_default_run_config,
+)
+from iree.turbine.kernel.wave.utils.torch_utils import (
+    device_zeros,
+)
+from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
+from iree.turbine.kernel.wave.constraints import MMAType
+from iree.turbine.kernel.wave.templates.quantized_attention import (
+    get_brevitas_pertensor_fp8_attention_kernel,
+)
+from iree.turbine.kernel.wave.templates.attention_common import AttentionShape
+from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
+
+# base_attention = None
+# hyperparams = None
+def functional_wave_kernel(q, k, v, q_scale, k_scale, v_scale):
+    # Order of shapes: (B, M, N, K1, K2)
+    # global base_attention
+    # global hyperparams
+    q_shape = q.shape
+    k_shape = k.shape
+    v_shape = v.shape
+    original_dtype = q.dtype
+    shape = AttentionShape(
+        num_query_heads=q_shape[-3],
+        num_kv_heads=k_shape[-3],
+        query_seq_len=q_shape[-2],
+        head_size_kv=v_shape[-1],
+        head_size=q_shape[-1],
+        kv_seq_len=v_shape[-2],
+    )
+    mfma_variant = (MMAType.F32_16x16x32_F8, MMAType.F32_16x16x32_K4_F8)#(MMAType.F32_32x32x16_F8, MMAType.F32_32x32x16_K4_F8)
+
+    (
+        base_attention,
+        hyperparams,
+        dynamic_symbols,
+        dynamic_symbols_map,
+    ) = get_brevitas_pertensor_fp8_attention_kernel(shape, mfma_variant, q_scale=q_scale.item(), k_scale=k_scale.item(), v_scale=v_scale.item())
+    hyperparams.update(get_default_scheduling_params())
+    dynamic_symbols = []
+    dynamic_symbols_map = {}
+    o_shape = (shape.num_query_heads, shape.query_seq_len, shape.head_size_kv)
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        schedule=SchedulingType.NONE,
+        use_scheduling_barriers=False,
+        dynamic_symbols=dynamic_symbols,
+        dynamic_symbols_map=dynamic_symbols_map,
+        waves_per_eu=2,
+        denorm_fp_math_f32="preserve-sign",
+        wave_runtime=True
+    )
+
+    options = set_default_run_config(options)
+    base_attention_compiled = wave_compile(options, base_attention)
+
+    output = device_zeros(o_shape, dtype=torch.float32)
+    base_attention_compiled(q/q_scale, k/k_scale, v/v_scale, output)
+    output = output.to(dtype=original_dtype)
+    return output
 
 class QuantScaledDotProductAttention(Module):
 
@@ -139,7 +204,7 @@ class QuantScaledDotProductAttention(Module):
         self.pre_process_q = pre_process_q
         self.pre_process_k = pre_process_k
         self.pre_process_v = pre_process_v
-        print(self.pre_process_q)
+        self.use_wave = False
 
         def filter_kwargs(prefix):
             return {k[len(prefix):]: v for k, v in kwargs.items() if k.startswith(prefix)}
@@ -213,14 +278,44 @@ class QuantScaledDotProductAttention(Module):
             else:
                 attn_bias += attn_mask
         query, key, value = self.pre_process_q(query), self.pre_process_k(key), self.pre_process_v(value)
-        q_scaled = self.q_scaled_quant(query * scale_factor)
-        k_transpose = self.k_transposed_quant(key.transpose(-2, -1))
-        attn_weight = q_scaled @ k_transpose
-        attn_weight += attn_bias
-        attn_weight = self.softmax_input_quant(attn_weight)
-        attn_weight = torch.softmax(attn_weight, dim=-1)
-        attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
-        attn_weight = self.attn_output_weights_quant(attn_weight)
-        attn_output = attn_weight @ self.v_quant(value)
-        attn_output = self.sdpa_output_quant(attn_output)
-        return attn_output
+
+        if not self.use_wave:
+
+            q_scaled = self.q_scaled_quant(query )* scale_factor
+            k_transpose = self.k_transposed_quant(key.transpose(-2, -1))
+            attn_weight = q_scaled @ k_transpose
+            attn_weight += attn_bias
+            # attn_weight = self.softmax_input_quant(attn_weight)
+            attn_weight = torch.softmax(attn_weight, dim=-1)
+            attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+            # attn_weight = self.attn_output_weights_quant(attn_weight)
+            attn_output = attn_weight @ self.v_quant(value)
+            # attn_output = self.sdpa_output_quant(attn_output)
+
+            return attn_output
+        else:
+            bq = None
+            if len(query.shape) > 3:
+                bq, sq = query.shape[0], query.shape[1]
+                bk, sk = key.shape[0], key.shape[1]
+                bv, sv = value.shape[0], value.shape[1]
+                query = query.view(bq * sq, *query.shape[2:])
+                key = key.view(bk * sk, *key.shape[2:])
+                value = value.view(bv * sv, *value.shape[2:])
+            # torch.save(query, 'query.pt')
+            # torch.save(key, 'key.pt')
+            # torch.save(value, 'value.pt')
+            # raise
+            q_scaled = self.q_scaled_quant(query)
+            k_transpose = self.k_transposed_quant(key)
+            value = self.v_quant(value)
+            q_scale = self.q_scaled_quant.act_quant.fused_activation_quant_proxy(q_scaled)[1]
+            k_scale = self.k_transposed_quant.act_quant.fused_activation_quant_proxy(k_transpose)[1]
+            v_scale = self.v_quant.act_quant.fused_activation_quant_proxy(value)[1]
+            oo = functional_wave_kernel(q_scaled, k_transpose, value, q_scale, k_scale, v_scale).unsqueeze(0)
+
+            if bq:
+                oo = oo.view(bq, -1, *oo.shape[2:])
+
+            return oo
+

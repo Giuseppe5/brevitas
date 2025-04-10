@@ -4,6 +4,10 @@ Copyright (C) 2023, Advanced Micro Devices, Inc. All rights reserved.
 """
 import re
 
+from brevitas.core.function_wrapper.shape import OverOutputFeaturesView, OverTensorView
+from brevitas.core.scaling.standalone import ConstScaling
+from brevitas.proxy.float_runtime_quant import DynamicActFloatQuantProxyFromInjector
+from brevitas_examples.common.generative.quant_blocks import RuntimeDynamicStatsScaling
 from dependencies import this
 import torch
 from torch import nn
@@ -157,6 +161,17 @@ WEIGHT_QUANT_MAP = {
                     'sym': Fp8e4m3FNUZWeightPerTensorFloat},
                 'per_channel': {
                     'sym': Fp8e4m3FNUZWeightPerChannelFloat}}}}}
+
+
+class PerTensorFp8Dynamic(Fp8e4m3FNUZActPerTensorFloat):
+    scaling_impl_type = 'const'
+    scaling_impl = ConstScaling
+    max_val = 10.
+    min_val = 0.
+    proxy_class = DynamicActFloatQuantProxyFromInjector
+    scaling_stats_input_view_shape_impl = OverTensorView
+    scaling_stats_op = 'min_max'
+    dynamic_scaling_broadcastable_fn = lambda x, shape: x.view(())
 
 INPUT_QUANT_MAP = {
     'int': {

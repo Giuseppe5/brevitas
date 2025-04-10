@@ -231,20 +231,20 @@ def quantize_llm(args, extra_args=None):
     device = next(iter(model.parameters())).device
     print("Data loaded.")
 
-    if args.eval:
-        assert args.export_target != 'torch_qcdq', "TorchScript QCDQ export and Evaluation simultaneously"
-        print("Float model eval...")
-        model = offload_model(model)
-        float_ppl = compute_perplexity(
-            model, validation_loader, context_length=args.seqlen // 2, tokenizer=tokenizer)
-        remove_hooks(model)
-        print(f"Float perplexity ({args.dataset}): {float_ppl:.3f}")
+    # if args.eval:
+    #     assert args.export_target != 'torch_qcdq', "TorchScript QCDQ export and Evaluation simultaneously"
+    #     print("Float model eval...")
+    #     model = offload_model(model)
+    #     float_ppl = compute_perplexity(
+    #         model, validation_loader, context_length=args.seqlen // 2, tokenizer=tokenizer)
+    #     remove_hooks(model)
+    #     print(f"Float perplexity ({args.dataset}): {float_ppl:.3f}")
 
     if args.replace_rmsnorm:
         model = replace_rmsnorm_with_torch(model, model.config)
 
     if require_fx:
-        if model.__class__.__name__ in _SUPPORTED_MODELS and not args.replace_rmsnorm:
+        if False:#model.__class__.__name__ in _SUPPORTED_MODELS and not args.replace_rmsnorm:
             model = get_fx(model, is_export=args.export_target is not None)
         else:
             with torch.no_grad():
@@ -386,6 +386,7 @@ def quantize_llm(args, extra_args=None):
             model=model, compute_layer_map=layer_map, name_blacklist=name_blacklist)
         # Tie back first/last layer weights in case they got untied
         print("Model quantization applied.")
+    model.eval()
 
     # If any equalization has taken places, the embedding layer and the fully connected one are
     # not tied anymore, and they need to be treated as standalone, separate layers.
@@ -528,6 +529,9 @@ def quantize_llm(args, extra_args=None):
             k._hf_hook.post_forward = v
 
         if args.eval and not args.no_quantize:
+            for m in model.modules():
+                if hasattr(m, 'use_wave'):
+                    m.use_wave = True
 
             print("Model eval...")
             with torch.no_grad(), quant_inference_mode(model, compile=args.compile_eval):

@@ -387,8 +387,8 @@ def validate(args, extra_args: Optional[List[str]] = None):
         assert args.rotation in ['fx', 'fused_no_fx'], f"Rotations can only be optimized if --rotation=fx or --rotation=fused_no_fx"
     else:
         assert extra_args is None or len(extra_args) == 0, f"The following unknown arguments were passed: {[extra_arg for extra_arg in extra_args if extra_arg.startswith('--')]}"
-    if args.functional_sdpa_quant:
-        assert args.input_scale_type == 'dynamic' or args.input_bit_width is None, "Functional SDPA Quant requires dynamic activation quantization"
+    # if args.functional_sdpa_quant:
+    #     assert args.input_scale_type == 'dynamic' or args.input_bit_width is None, "Functional SDPA Quant requires dynamic activation quantization"
     if args.rotation == 'fx':
         assert args.ln_affine_merge, 'Graph rotation requires to merge LN/RMS norm affine parameters'
         assert args.replace_rmsnorm, 'Graph rotation requires to replace HF RMSNorm with PyTorch ones (torch 2.4+ require)'
