@@ -141,7 +141,7 @@ def run_test_inference(
                                  negative_prompt=neg_prompts,
                                  height=resolution,
                                  width=resolution,
-                                 guidance_scale=guidance_scale,
+                                 guidance_scale=8.,
                                  num_inference_steps=inference_steps,
                                  generator=generator).images
 
@@ -184,7 +184,7 @@ def run_val_inference(
                 prompt,
                 negative_prompt=neg_prompts[0],
                 output_type=output_type,
-                guidance_scale=guidance_scale,
+                guidance_scale=8.,
                 height=resolution,
                 width=resolution,
                 num_inference_steps=total_steps,
@@ -278,7 +278,7 @@ def main(args):
 
     # Move model to target device
     print(f"Moving model to {args.device}...")
-    pipe = pipe.to(args.device)
+    pipe = pipe.to('cuda:0')
 
     if args.prompt > 0 and args.inference_pipeline == 'samples':
         print(f"Running inference with prompt ...")
@@ -307,6 +307,49 @@ def main(args):
     blacklist = []
     non_blacklist = dict()
 
+    from brevitas.graph.equalize import GraphRotationEqualization
+    few_shot_calibration_prompts = []
+    counter = [0]
+
+    def calib_hook(module, inp, inp_kwargs):
+        if counter[0] == 0:
+            few_shot_calibration_prompts.append((inp, inp_kwargs))
+        counter[0] += 1
+        if counter[0] == args.calibration_steps:
+            counter[0] = 0
+
+    h = pipe.unet.register_forward_pre_hook(calib_hook, with_kwargs=True)
+
+    run_val_inference(
+        pipe,
+        args.resolution,
+        [calibration_prompts[0]],
+        test_seeds,
+        args.device,
+        dtype,
+        deterministic=args.deterministic,
+        total_steps=args.calibration_steps,
+        use_negative_prompts=args.use_negative_prompts,
+        test_latents=latents,
+        guidance_scale=args.guidance_scale,
+        is_unet=is_unet)
+    h.remove()
+    from brevitas_examples.llm.llm_quant.ln_affine_merge import apply_layernorm_affine_merge
+    from brevitas_examples.llm.llm_quant.ln_affine_merge import apply_layernorm_to_rmsnorm
+
+    with torch.no_grad():
+        for net_args, net_kwargs in few_shot_calibration_prompts:
+            denoising_network, guards = torch._dynamo.export(denoising_network)(*net_args, **net_kwargs)
+    apply_layernorm_affine_merge(denoising_network)
+    apply_layernorm_to_rmsnorm(denoising_network)
+    eq = GraphRotationEqualization(
+        orphan_sink=False,
+        full_rotation_method='had',
+        sdpa_regions=False,
+        use_parametrized_rotations=False,
+        layers_to_expand=[])
+    eq.apply(denoising_network)
+    raise
     for name, _ in denoising_network.named_modules():
         if any(map(lambda x: x in name, args.quant_recursive_blacklist)):
             blacklist.append(name)
@@ -978,7 +1021,7 @@ if __name__ == "__main__":
         '-m',
         '--model',
         type=str,
-        default='/scratch/hf_models/stable-diffusion-2-1-base',
+        default='/scratch/hf_models/stable-diffusion-xl-base-1.0/stable-diffusion-xl-base-1.0/',
         help='Path or name of the model.')
     parser.add_argument(
         '-d', '--device', type=str, default='cuda:0', help='Target device for quantized model.')
