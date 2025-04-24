@@ -3,6 +3,8 @@
 
 from functools import partial
 
+from brevitas.proxy.quant_proxy import QuantProxyFromInjector
+from brevitas.nn.quant_layer import QuantWeightBiasInputOutputLayer
 import torch
 from torch.nn import Module
 import torch.nn as nn
@@ -53,6 +55,7 @@ class qop_inference_mode:
         self.export_manager = QOpManager
         self.hook_list = []
         self.return_quant_tensor_state = dict()
+        self.compile = compile
 
     def __enter__(self):
         if self.enabled:
@@ -97,7 +100,14 @@ class qop_inference_mode:
         self.return_quant_tensor_state = disable_return_quant_tensor(self.model)
         disable_quant_tensor = partial(_override_create_quant_tensor, state=True)
         self.model.apply(disable_quant_tensor)
-
+        if self.compile:
+            import brevitas.nn as qnn
+            # This is needed to avoid too many recompilations during weight quantization
+            torch._dynamo.config.force_parameter_static_shapes = False
+            for m in self.model.modules():
+                if isinstance(m, qnn.QuantLinear):# and hasattr(
+                        #m, 'compile_quant') and m.is_quant_enabled:
+                    m.export_handler = torch.compile(m.export_handler) #(compile_export=True)
 
 # Inheritance from BaseManager is not techincally needed
 class QOpManager(BaseManager):

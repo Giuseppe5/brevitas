@@ -236,6 +236,8 @@ def quantize_llm(args, extra_args=None):
         model = offload_model(model)
         float_ppl = compute_perplexity(
             model, validation_loader, context_length=args.seqlen // 2, tokenizer=tokenizer)
+        float_ppl = compute_perplexity(
+            model, validation_loader, context_length=args.seqlen // 2, tokenizer=tokenizer)
         remove_hooks(model)
         print(f"Float perplexity ({args.dataset}): {float_ppl:.3f}")
 
@@ -532,8 +534,10 @@ def quantize_llm(args, extra_args=None):
 
             print("Model eval...")
             from brevitas.export.shark.wave import qop_inference_mode
-            with torch.no_grad(), qop_inference_mode(model, compile=args.compile_eval):
+            with torch.no_grad(), quant_inference_mode(model, compile=args.compile_eval):
                 model(**calibration_loader[0])
+                quant_ppl = compute_perplexity(
+                    model, validation_loader, context_length=args.seqlen // 2, tokenizer=tokenizer)
                 quant_ppl = compute_perplexity(
                     model, validation_loader, context_length=args.seqlen // 2, tokenizer=tokenizer)
             # with torch.no_grad(), quant_inference_mode(model, compile=args.compile_eval):
