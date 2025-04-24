@@ -14,7 +14,7 @@ from brevitas.export.manager import _set_proxy_export_mode
 from brevitas.export.manager import _set_recurrent_layer_export_handler
 from brevitas.export.manager import _set_recurrent_layer_export_mode
 from brevitas.export.manager import BaseManager
-from brevitas.export.shark.wave import QuantLinearFp8Handler
+from brevitas.export.shark.wave import QuantLinearHandler
 from brevitas.graph.calibrate import disable_return_quant_tensor
 from brevitas.graph.calibrate import restore_return_quant_tensor
 
@@ -44,13 +44,13 @@ def _override_create_quant_tensor(m: nn.Module, state: bool):
         m.skip_create_quant_tensor = state
 
 
-class wave_inference_mode:
+class qop_inference_mode:
 
-    def __init__(self, model, cache_quant_weight=False, enabled=True):
+    def __init__(self, model, cache_quant_weight=False, enabled=True, compile=False):
         self.model = model
         self.enabled = enabled
         self.cache_quant_weight = cache_quant_weight
-        self.export_manager = SharkWaveManager
+        self.export_manager = QOpManager
         self.hook_list = []
         self.return_quant_tensor_state = dict()
 
@@ -73,7 +73,7 @@ class wave_inference_mode:
         # Disable all caching
         # deactivate export mode
         # restore return quant tensor
-        SharkWaveManager.set_export_mode(self.model, enabled=False)
+        QOpManager.set_export_mode(self.model, enabled=False)
         self.model.apply(
             lambda m: _override_bias_caching_mode(m, enabled=False, metadata_only=False))
         self.model.apply(
@@ -92,16 +92,16 @@ class wave_inference_mode:
         # - Disable return quant tensor since all quant metadata is cached
         assert len(self.hook_list) == 1
         self.hook_list[0].remove()
-        self.model.apply(SharkWaveManager.set_export_handler)
-        SharkWaveManager.set_export_mode(self.model, enabled=True)
+        self.model.apply(QOpManager.set_export_handler)
+        QOpManager.set_export_mode(self.model, enabled=True)
         self.return_quant_tensor_state = disable_return_quant_tensor(self.model)
         disable_quant_tensor = partial(_override_create_quant_tensor, state=True)
         self.model.apply(disable_quant_tensor)
 
 
 # Inheritance from BaseManager is not techincally needed
-class SharkWaveManager(BaseManager):
-    handlers = [QuantLinearFp8Handler]
+class QOpManager(BaseManager):
+    handlers = [QuantLinearHandler]
 
     @classmethod
     def set_export_mode(cls, model: Module, enabled: bool):

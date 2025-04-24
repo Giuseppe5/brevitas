@@ -5,13 +5,13 @@ from abc import ABC
 from abc import abstractmethod
 from typing import Tuple
 
-from iree.turbine.kernel.wave.nn import WaveQuantLinear
 import torch
-from torch import Tensor
 import torch.nn as nn
 
 from brevitas.export.inference.handler import FloatInferencetHandler
 from brevitas.export.inference.handler import FloatWeightInferencetHandler
+from brevitas.export.inference.handler import IntInferencetHandler
+from brevitas.export.inference.handler import IntWeightInferencetHandler
 from brevitas.nn import QuantLinear
 
 
@@ -25,13 +25,14 @@ class InferenceHandler(torch.nn.Module, ABC):
         pass
 
 
-class QuantLinearFp8Handler(InferenceHandler):
+class QuantLinearHandler(InferenceHandler):
     handled_layer = QuantLinear
 
     def __init__(self):
         super().__init__()
-        self.weight_quant = FloatWeightInferencetHandler()
-        self.input_quant = FloatInferencetHandler()
+
+        self.weight_quant = None  #FloatWeightInferencetHandler()
+        self.input_quant = None  #FloatInferencetHandler()
         self.wave_linear = None
 
     def validate(self, module):
@@ -39,57 +40,56 @@ class QuantLinearFp8Handler(InferenceHandler):
         pass
 
     def prepare_for_export(self, module):
+        if True:  #check if is fp8 quantization
+            self.weight_quant = FloatWeightInferencetHandler()
+            self.input_quant = FloatInferencetHandler()
+            self.inference_dtype = torch.float8_e4m3fnuz
+        else:
+            self.weight_quant = IntWeightInferencetHandler()
+            self.input_quant = IntInferencetHandler()
+            self.inference_dtype = torch.int8
+
         ## Weight export
         out_feat, input_feat = module.weight.shape[0], module.weight.shape[1]
+        device = module.weight.device
+        self.dtype = module.weight.dtype
         if module.weight_quant.is_quant_enabled:
             weight_quant = module.weight_quant
             self.weight_quant.prepare_for_export(weight_quant)
+            self.weight_scale = self.weight_quant.scale.to(device).to(torch.float32)
+
         if module.input_quant.is_quant_enabled:
             input_quant = module.input_quant
             self.input_quant.prepare_for_export(input_quant)
-        quant_params = {
-            'weight_scale': self.weight_quant.scale,
-            'weight_scale_shape': self.weight_quant.scale.shape,
-            'input_scale': self.input_quant.scale,
-            'input_scale_shape': self.input_quant.scale.shape,
-            'qdtype': torch.float8_e4m3fnuz}
-        # self.wave_linear = WaveQuantLinear(
-        #     input_feat, out_feat, quant_params, bias=False)
-        # self.wave_linear.weight.data = module.weight.data
-        # if module.bias is not None:
-        #     self.wave_linear.bias.data = module.bias.data
+            self.input_scale = self.input_quant.scale.to(device).to(torch.float32)
+
         self.bias = module.bias
         self.weight = module.weight
         del module.weight
         del module.bias
 
     def forward(self, input):
-        input_q = self.input_quant.quantize(input, self.input_quant.scale.to(input.device), None)
-        weight_q = self.weight_quant.quantize(
-            self.weight, self.weight_quant.scale.to(input.device), None)
+        input_q = self.input_quant.quantize(input, self.input_scale, None)
+        weight_q = self.weight_quant.quantize(self.weight, self.weight_scale, None)
 
-        if len(input_q.shape) > 2:
+        if len(input_q.shape) == 3:
             B = input_q.shape[0]
-            output_1 = torch.stack(
-                [
-                    torch._scaled_mm(
-                        input_q[i].to(torch.float8_e4m3fnuz),
-                        weight_q.t().to(torch.float8_e4m3fnuz),
-                        scale_a=self.input_quant.scale.to(input.device),
-                        scale_b=self.weight_quant.scale.to(input.device),
-                        # bias=self.bias,
-                        out_dtype=torch.float16) for i in range(B)],
-                dim=0)
-        else:
-            output_1 = torch._scaled_mm(
-                input_q.to(torch.float8_e4m3fnuz),
-                weight_q.t().to(torch.float8_e4m3fnuz),
-                scale_a=self.input_quant.scale.to(input.device),
-                scale_b=self.weight_quant.scale.to(input.device),
-                # bias=self.bias,
-                out_dtype=torch.float16)
+            out = torch.stack([
+                torch._scaled_mm(
+                    input_q[i].to(self.inference_dtype),
+                    weight_q.t().to(self.inference_dtype),
+                    scale_a=self.input_scale,
+                    scale_b=self.weight_scale,
+                    bias=self.bias,
+                    out_dtype=self.dtype) for i in range(B)],
+                              dim=0)
+        elif len(input_q.shape) == 2:
+            out = torch._scaled_mm(
+                input_q.to(self.inference_dtype),
+                weight_q.t().to(self.inference_dtype),
+                scale_a=self.input_scale,
+                scale_b=self.weight_scale,
+                bias=self.bias,
+                out_dtype=self.dtype)
 
-        if self.bias is not None:
-            output_1 += self.bias
-
-        return output_1
+        return out
