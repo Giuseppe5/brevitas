@@ -13,6 +13,7 @@ from brevitas.function import compute_max_mantissa
 from brevitas.function.ops import max_float
 from brevitas.function.ops import max_int
 from brevitas.function.ops import min_int
+from brevitas.nn.quant_linear import QuantLinear
 from brevitas.proxy.float_parameter_quant import WeightFloatQuantProxyFromInjector
 from brevitas.proxy.float_runtime_quant import ActFloatQuantProxyFromInjector
 from brevitas.proxy.float_runtime_quant import DynamicActFloatQuantProxyFromInjector
@@ -354,3 +355,35 @@ class DynamicFloatInferenceHandler(FloatInferencetHandler):
 
     def forward(self, x: Tensor, unused_scale: Tensor = None) -> Tuple[Tensor]:
         return self.module_forward(x)
+
+
+class Fp8Linear(torch.nn.Module):
+    handled_layer = QuantLinear
+
+    def __init__(self):
+        super().__init__()
+        self.act_quant = FloatInferencetHandler()
+        self.weight_quant = FloatWeightInferencetHandler()
+
+    def attach_debug_info(self, module: nn.Module):
+        pass
+
+    def prepare_for_export(self, module):
+        self.act_quant.prepare_for_export(module.input_quant)
+        self.weight_quant.prepare_for_export(module.weight_quant)
+        self.weight_ref = module.weight.t()
+
+    def forward(self, x):
+        batched = x.dim() == 3
+        x_view = x.view(-1, x.shape[-1]) if batched else x
+        act_scale = self.act_quant.scale.to(torch.float32)
+        weight_scale = self.weight_quant.scale.to(torch.float32)
+        x_quant = self.act_quant.quantize(x_view, act_scale, self.act_quant.zero_point)
+        weight_quant = self.weight_quant.quantize(
+            self.weight_ref, self.act_quant.scale, self.act_quant.zero_point)
+        x_quant = x_quant.to(torch.float8_e4m3fn)
+        weight_quant = weight_quant.to(torch.float8_e4m3fn)
+        o = torch._scaled_mm(
+            x_quant, weight_quant, scale_a=act_scale, scale_b=weight_scale, out_dtype=torch.float16)
+        o = o.view(x.shape[0], x.shape[1], o.shape[-1]) if batched else o
+        return o

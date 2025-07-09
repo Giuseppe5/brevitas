@@ -415,7 +415,6 @@ def offload_model(
             memory_map,
             no_split_module_classes=model._no_split_modules
             if hasattr(model, "_no_split_modules") else None)
-
     model = dispatch_model(model, device_map)
 
     # Fixes an asymetric behavior in Accelerate where hooks are not attached at all when a single device is used.

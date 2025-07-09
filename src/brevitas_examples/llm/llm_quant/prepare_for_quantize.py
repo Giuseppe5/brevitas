@@ -3,7 +3,11 @@
 
 import torch
 import torch.nn.functional as F
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+try:
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+except:
+    ALL_ATTENTION_FUNCTIONS = dict()
 
 from brevitas.graph import ModuleToModuleByClass
 from brevitas.graph import TorchFunctionalToModule
@@ -49,7 +53,11 @@ def replace_mlperf_attn(model):
         if type(m).__name__.lower().endswith('attention'):
             quant_block_type = type(m)
             break
-    r = ModuleToModuleByClass(quant_block_type, LlamaQuantAttention)
+    r = ModuleToModuleByClass(
+        quant_block_type,
+        LlamaQuantAttention,
+        config=lambda module: module.config,
+        layer_idx=lambda module: module.layer_idx)
     model = r.apply(model)
     return model
 

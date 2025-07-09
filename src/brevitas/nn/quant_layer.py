@@ -134,6 +134,9 @@ class QuantWeightBiasInputOutputLayer(QuantBiasMixin, QuantWeightMixin, QuantInp
     def merge_bn_in(self, bn):
         merge_bn(self, bn, output_channel_dim=self.output_channel_dim)
 
+    def compile_quant(self):
+        self.export_handler = torch.compile(self.export_handler, dynamic=True, fullgraph=True)
+
     def forward_impl(self, inp: Union[Tensor, QuantTensor]) -> Union[Tensor, QuantTensor]:
 
         inp = self.unpack_input(inp)
@@ -141,7 +144,6 @@ class QuantWeightBiasInputOutputLayer(QuantBiasMixin, QuantWeightMixin, QuantInp
         # shortcut execution through the export impl during export
         if self.export_mode:
             out = self.export_handler(inp)
-            self._set_global_is_quant_layer(False)
             return out
 
         quant_input = self.input_quant(inp)

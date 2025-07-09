@@ -4,7 +4,11 @@ from typing import Tuple
 
 import torch
 from torch import nn
-from transformers.integrations.sdpa_attention import repeat_kv
+
+try:
+    from transformers.integrations.sdpa_attention import repeat_kv
+except:
+    from transformers.models.llama.modeling_llama import repeat_kv
 
 from brevitas.nn import ScaledDotProductAttention
 from brevitas.nn.equalized_layer import EqualizedModule
@@ -26,7 +30,7 @@ class LlamaQuantAttention(LlamaAttention):
     """
 
     def __init__(self, *args, **kwargs):
-        super.__init__(**args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.attn = ScaledDotProductAttention()
 
     # Adapted from LlamaAttention.forward

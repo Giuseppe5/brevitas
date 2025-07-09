@@ -13,18 +13,22 @@ from brevitas.export.inference.handler import DynamicFloatInferenceHandler
 from brevitas.export.inference.handler import DynamicIntInferenceHandler
 from brevitas.export.inference.handler import FloatInferencetHandler
 from brevitas.export.inference.handler import FloatWeightInferencetHandler
+from brevitas.export.inference.handler import Fp8Linear
 from brevitas.export.inference.handler import GroupwiseFloatInferenceHandler
 from brevitas.export.inference.handler import GroupwiseFloatWeightInferenceHandler
 from brevitas.export.inference.handler import GroupwiseIntInferenceHandler
 from brevitas.export.inference.handler import GroupwiseIntWeightInferenceHandler
 from brevitas.export.inference.handler import IntInferencetHandler
 from brevitas.export.inference.handler import IntWeightInferencetHandler
+from brevitas.export.manager import _set_layer_export_handler
+from brevitas.export.manager import _set_layer_export_mode
 from brevitas.export.manager import _set_proxy_export_handler
 from brevitas.export.manager import _set_proxy_export_mode
 from brevitas.export.manager import _set_recurrent_layer_export_handler
 from brevitas.export.manager import _set_recurrent_layer_export_mode
 from brevitas.export.manager import BaseManager
 from brevitas.graph.calibrate import QuantizationStatusManager
+from brevitas.nn.mixin.base import QuantLayerMixin
 from brevitas.proxy.quant_proxy import QuantProxyFromInjector
 
 
@@ -85,7 +89,7 @@ class quant_inference_mode:
             # Disable all caching
             # deactivate export mode
             # restore return quant tensor
-            InferenceManager.set_export_mode(self.model, enabled=False)
+            LayerInferenceManager.set_export_mode(self.model, enabled=False)
             self.model.apply(
                 lambda m: _override_bias_caching_mode(m, enabled=False, metadata_only=False))
             self.model.apply(
@@ -105,8 +109,8 @@ class quant_inference_mode:
         # - Disable return quant tensor since all quant metadata is cached
         assert len(self.hook_list) == 1
         self.hook_list[0].remove()
-        self.model.apply(InferenceManager.set_export_handler)
-        InferenceManager.set_export_mode(self.model, enabled=True)
+        self.model.apply(LayerInferenceManager.set_export_handler)
+        LayerInferenceManager.set_export_mode(self.model, enabled=True)
         self.return_quant_tensor_state = QuantizationStatusManager.disable_return_quant_tensor(
             self.model)
         disable_quant_tensor = partial(_override_create_quant_tensor, state=True)
@@ -115,9 +119,8 @@ class quant_inference_mode:
             # This is needed to avoid too many recompilations during weight quantization
             torch._dynamo.config.force_parameter_static_shapes = False
             for m in self.model.modules():
-                if isinstance(m, QuantProxyFromInjector) and hasattr(
-                        m, 'compile_quant') and m.is_quant_enabled:
-                    m.compile_quant(compile_export=True)
+                if isinstance(m, QuantLayerMixin) and hasattr(m, 'compile_quant'):
+                    m.compile_quant()
 
 
 # Inheritance from BaseManager is not techincally needed
@@ -143,3 +146,16 @@ class InferenceManager(BaseManager):
     def set_export_handler(cls, module: Module):
         _set_proxy_export_handler(cls, module)
         _set_recurrent_layer_export_handler(cls, module)
+
+
+# Inheritance from BaseManager is not techincally needed
+class LayerInferenceManager(BaseManager):
+    handlers = [Fp8Linear]
+
+    @classmethod
+    def set_export_mode(cls, model: Module, enabled: bool):
+        _set_layer_export_mode(model, enabled)
+
+    @classmethod
+    def set_export_handler(cls, module: Module):
+        _set_layer_export_handler(cls, module)
