@@ -172,7 +172,6 @@ def model_export(model, tokenizer, ref_input, args, config=None):
             export_path = f"./{args.export_prefix}/dataset.irpa"
 
         print(f"Exporting the model in {export_path}")
-
         export = SharkManager(config=config)
         with torch.no_grad():
             model = offload_model(model)

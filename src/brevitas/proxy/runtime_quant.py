@@ -102,6 +102,7 @@ class ActQuantProxyFromInjectorBase(QuantProxyFromInjector, ActQuantProxyProtoco
         self.cache_quant_io_metadata_only = True
         self.cache_class = None
         self.skip_create_quant_tensor = False
+        self.observer_only = False
 
     def compile_quant(self, compile_export=False):
         fullgraph = not self.is_groupwise
@@ -199,7 +200,7 @@ class ActQuantProxyFromInjectorBase(QuantProxyFromInjector, ActQuantProxyProtoco
         # If y is an empty QuantTensor, we need to check if this is a passthrough proxy,
         # otherwise return a simple Tensor
 
-        if self.skip_create_quant_tensor:
+        if self.skip_create_quant_tensor or self.observer_only:
             out = y[0]
         else:
             # If the second value (i.e., scale) is None, then quant is disabled
