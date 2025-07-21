@@ -4,11 +4,15 @@
 from typing import Optional
 
 from sharktank.types import DefaultPrimitiveTensor
+from sharktank.types import DynamicFp4BlockQuantizer
+from sharktank.types import StaticFp4BlockQuantizer
 from sharktank.types import StaticScaledQuantizer
 import torch
 from torch import Tensor
 import torch.nn as nn
 
+from brevitas.export.inference.handler import GroupwiseActFloatQuantProxyFromInjector
+from brevitas.export.inference.handler import GroupwiseWeightQuantProxyFromInjector
 from brevitas.function.ops import max_int
 from brevitas.function.ops import min_int
 import brevitas.nn as qnn
@@ -73,6 +77,9 @@ class SharkWeightQuantMixin:
             zero_point = None if torch.count_nonzero(zero_point) == 0 else (zero_point -
                                                                             128.).to(scale.device)
             quant_metadata = {'scale': scale, 'zero_point': zero_point}
+            quant_metadata['quant'] = StaticScaledQuantizer
+            quant_metadata['groupwise'] = False
+
             if isinstance(module, WeightQuantProxyFromInjector):
                 assert module.bit_width() == 8., "Only Int8 is supported for export"
                 quant_metadata['dtype'] = torch.int8
@@ -87,6 +94,15 @@ class SharkWeightQuantMixin:
                     quant_metadata['dtype'] = torch.float8_e4m3fnuz
                 else:
                     raise ValueError("Dtype not supported for export")
+            elif isinstance(module, GroupwiseWeightQuantProxyFromInjector):
+                # TODO assert for all the other properties of MXFP4
+                assert module.group_size == 32
+                assert module.is_ocp_e2m1
+                quant_metadata['quant'] = StaticFp4BlockQuantizer
+                quant_metadata['groupwise'] = True
+                # Not sure if this is correct?
+                quant_metadata['dtype'] = scale.dtype
+
             return quant_metadata
         else:
             return None
@@ -94,6 +110,7 @@ class SharkWeightQuantMixin:
     def weight_quant(self, quant_metadata, *args):
         assert hasattr(self.module, 'weight')
         weight = self.module.weight
+        QuantClass = quant_metadata['quant']
         scale = quant_metadata['scale']
         zero_point = quant_metadata['zero_point']
         layer_name = quant_metadata['layer_name']
@@ -103,12 +120,18 @@ class SharkWeightQuantMixin:
         if zero_point is not None:
             zero_point = zero_point.to(weight.device)
 
-        weight_quant = StaticScaledQuantizer(
-            name=layer_name,
-            scale=torch.reciprocal(scale),
-            reciprocal_scale=scale,
-            offset=zero_point,
-            dtype=dtype)
+        is_groupwise = quant_metadata['groupwise']
+
+        if not is_groupwise:
+            kwargs = {
+                'scale': torch.reciprocal(scale),
+                'reciprocal_scale': scale,
+                'offset': zero_point,
+                'dtype': dtype}
+        else:
+            kwargs = {'scales': torch.reciprocal(scale), 'dtype': dtype}
+
+        weight_quant = QuantClass(name=layer_name, **kwargs)
         quant_weight = weight_quant.quantize(weight, name=layer_name)
         shared_dict[layer_name] = quant_weight
         return args
@@ -124,6 +147,7 @@ class SharkActQuantMixin:
             zero_point = module.zero_point().contiguous().to(torch.float32).cpu()
             zero_point = None if torch.count_nonzero(zero_point) == 0 else (zero_point - 128.)
             quant_metadata = {'scale': scale, 'zero_point': zero_point}
+            quant_metadata['is_dynamic'] = False
             if isinstance(module, ActQuantProxyFromInjector):
                 assert module.bit_width() == 8., "Only Int8 is supported for export"
                 quant_metadata['dtype'] = torch.int8
@@ -138,13 +162,19 @@ class SharkActQuantMixin:
                     quant_metadata['dtype'] = torch.float8_e4m3fnuz
                 else:
                     raise ValueError("Dtype not supported for export")
+            elif isinstance(module, GroupwiseActFloatQuantProxyFromInjector):
+                # TODO assert for all the other properties of MXFP4
+                assert module.group_size == 32
+                assert module.is_ocp_e2m1
+                quant_metadata['is_dynamic'] = True
+                # Not sure if this is correct?
+                quant_metadata['dtype'] = scale.dtype
+
             return quant_metadata
         else:
             return None
 
-    def act_quant(self, quant_metadata, *args):
-        if quant_metadata is None:
-            return args
+    def static_act_quant(self, quant_metadata):
         scale = quant_metadata['scale']
         zero_point = quant_metadata['zero_point']
         layer_name = quant_metadata['layer_name']
@@ -158,6 +188,21 @@ class SharkActQuantMixin:
             offset=zero_point,
             dtype=dtype)
         shared_dict[layer_name] = input_quant
+
+    def dynamic_act_quant(self, quant_metadata):
+        dtype = quant_metadata['dtype']
+        layer_name = quant_metadata['layer_name']
+        shared_dict = quant_metadata['shared_dict']
+        input_quant = DynamicFp4BlockQuantizer(name=layer_name, dtype=dtype)
+        shared_dict[layer_name] = input_quant
+
+    def act_quant(self, quant_metadata, *args):
+        if quant_metadata is None:
+            return args
+        if quant_metadata['is_dynamic']:
+            self.dynamic_act_quant(quant_metadata)
+        else:
+            self.static_act_quant(quant_metadata)
         return args
 
 
