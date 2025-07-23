@@ -4,6 +4,7 @@
 from typing import Optional
 
 from brevitas.proxy.groupwise_float_parameter_quant import GroupwiseWeightFloatQuantProxyFromInjector
+from brevitas_examples.stable_diffusion.sd_quant.nn import QuantAttention
 from sharktank.types import DefaultPrimitiveTensor
 from sharktank.types import DynamicFp4BlockQuantizer
 from sharktank.types import StaticFp4BlockQuantizer
@@ -259,6 +260,93 @@ class SharkLinearQuant(nn.Module, SharkWeightQuantMixin, SharkActQuantMixin):
         out = torch.nn.functional.linear(quant_input, quant_weight, self.module.bias)
         quant_out = self.act_quant(self.quant_output_metadata, out)[0]
         return quant_out
+
+
+class SharkConvQuant(nn.Module, SharkWeightQuantMixin, SharkActQuantMixin):
+    handled_layer = qnn.QuantConv2d
+
+    def __init__(self):
+        super().__init__()
+        self.layer_name = None
+        self.shared_dict = None
+        self.init_done = False
+
+    def attach_debug_info(self, module: nn.Module):
+        pass
+
+    def prepare_for_export(self, module: nn.Module):
+        if hasattr(module, 'allocate_params'):
+            module.allocate_params(module)
+        self.quant_weight_metadata = self.prepare_weight_for_export(module.weight_quant)
+        if self.quant_weight_metadata is not None:
+            self.quant_weight_metadata['layer_name'] = self.layer_name + '.weight'
+            self.quant_weight_metadata['shared_dict'] = self.shared_dict
+        self.quant_input_metadata = self.prepare_act_for_export(module.input_quant)
+        if self.quant_input_metadata is not None:
+            self.quant_input_metadata['layer_name'] = self.layer_name + '.q_input'
+            self.quant_input_metadata['shared_dict'] = self.shared_dict
+        self.quant_output_metadata = self.prepare_act_for_export(module.output_quant)
+        if self.quant_output_metadata is not None:
+            self.quant_output_metadata['layer_name'] = self.layer_name + '.q_output'
+            self.quant_output_metadata['shared_dict'] = self.shared_dict
+        if hasattr(module, 'offload_params'):
+            module.offload_params(module)
+        self.module = module
+        self.stride = module.stride
+        self.padding = module.padding
+        self.dilation = module.dilation
+        self.groups = module.groups
+
+    def forward(self, x):
+        assert self.layer_name is not None
+        assert self.shared_dict is not None
+
+        quant_weight = self.weight_quant(self.quant_weight_metadata, self.module.weight)[0]
+        quant_input = self.act_quant(self.quant_input_metadata, x)[0]
+        out = torch.nn.functional.conv2d(quant_input, quant_weight, self.module.bias, self.stride, self.padding, self.dilation, self.groups)
+        quant_out = self.act_quant(self.quant_output_metadata, out)[0]
+        return quant_out
+
+
+class SharkQuantIdentity(nn.Module, SharkWeightQuantMixin, SharkActQuantMixin):
+    handled_layer = qnn.QuantIdentity
+
+    def __init__(self):
+        super().__init__()
+        self.layer_name = None
+        self.shared_dict = None
+        self.init_done = False
+
+    def attach_debug_info(self, module: nn.Module):
+        pass
+
+    def prepare_for_export(self, module: nn.Module):
+        if hasattr(module, 'allocate_params'):
+            module.allocate_params(module)
+        # self.quant_weight_metadata = self.prepare_weight_for_export(module.weight_quant)
+        # if self.quant_weight_metadata is not None:
+        #     self.quant_weight_metadata['layer_name'] = self.layer_name + '.weight'
+        #     self.quant_weight_metadata['shared_dict'] = self.shared_dict
+        # self.quant_input_metadata = self.prepare_act_for_export(module.input_quant)
+        # if self.quant_input_metadata is not None:
+        #     self.quant_input_metadata['layer_name'] = self.layer_name + '.q_input'
+        #     self.quant_input_metadata['shared_dict'] = self.shared_dict
+        self.quant_act = self.prepare_act_for_export(module.act_quant)
+        if self.quant_act is not None:
+            self.quant_act['layer_name'] = self.layer_name
+            self.quant_act['shared_dict'] = self.shared_dict
+        if hasattr(module, 'offload_params'):
+            module.offload_params(module)
+
+
+    def forward(self, x):
+        assert self.layer_name is not None
+        assert self.shared_dict is not None
+        print(self.layer_name)
+
+        quant_input = self.act_quant(self.quant_act, x)[0]
+
+        return x
 
 
 class SharkQuantSDPA(nn.Module, SharkWeightQuantMixin, SharkActQuantMixin):

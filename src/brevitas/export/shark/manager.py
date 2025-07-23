@@ -10,14 +10,14 @@ from torch.nn import Module
 from brevitas.export.manager import _set_layer_export_handler
 from brevitas.export.manager import _set_layer_export_mode
 from brevitas.export.manager import BaseManager
-from brevitas.export.shark.handler import SharkActEqualization
+from brevitas.export.shark.handler import SharkActEqualization, SharkConvQuant, SharkQuantIdentity
 from brevitas.export.shark.handler import SharkLinearQuant
 from brevitas.export.shark.handler import SharkQuantSDPA
 
 
 # Inheritance from BaseManager is not techincally needed
 class SharkManager(BaseManager):
-    handlers = [SharkActEqualization, SharkLinearQuant, SharkQuantSDPA]
+    handlers = [SharkActEqualization, SharkLinearQuant, SharkQuantSDPA, SharkConvQuant, SharkQuantIdentity]
 
     def __init__(self, model = None, config=None, output = None):
         super().__init__()
