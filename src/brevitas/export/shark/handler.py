@@ -342,7 +342,6 @@ class SharkQuantIdentity(nn.Module, SharkWeightQuantMixin, SharkActQuantMixin):
     def forward(self, x):
         assert self.layer_name is not None
         assert self.shared_dict is not None
-        print(self.layer_name)
 
         quant_input = self.act_quant(self.quant_act, x)[0]
 
