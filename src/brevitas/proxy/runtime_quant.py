@@ -200,7 +200,7 @@ class ActQuantProxyFromInjectorBase(QuantProxyFromInjector, ActQuantProxyProtoco
         # If y is an empty QuantTensor, we need to check if this is a passthrough proxy,
         # otherwise return a simple Tensor
 
-        if self.skip_create_quant_tensor or self.observer_only:
+        if self.skip_create_quant_tensor or self.observer_only or self.export_mode:
             out = y[0]
         else:
             # If the second value (i.e., scale) is None, then quant is disabled

@@ -72,7 +72,8 @@ class gpxq_mode(quantization_status_manager):
             create_weight_orig: bool = True,
             use_quant_activations: bool = True,
             act_order: bool = False,
-            return_forward_output: bool = False) -> None:
+            return_forward_output: bool = False,
+            blacklist_layer = None) -> None:
         if not inplace:
             model = deepcopy(model)
         # Note that if use_quant_activations = True, the super() context manager
@@ -83,6 +84,12 @@ class gpxq_mode(quantization_status_manager):
             disable_weight_quant=False,
             disable_bias_quant=not use_quant_activations,
         )
+
+        if blacklist_layer is None:
+            self.blacklist_layer = []
+        else:
+            self.blacklist_layer = blacklist_layer
+
         self.create_weight_orig = create_weight_orig
         self.use_quant_activations = use_quant_activations
         self.hook_dict = dict()
@@ -144,6 +151,9 @@ class gpxq_mode(quantization_status_manager):
 
                 # Attach hooks for GPTQ
                 if self._is_module_supported(module):
+                    if name in self.blacklist_layer:
+                        continue
+                    print(name)
                     gpxq_module_optimizer = self.initialize_module_optimizer(
                         module,
                         name,

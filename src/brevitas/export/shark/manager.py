@@ -19,11 +19,14 @@ from brevitas.export.shark.handler import SharkQuantSDPA
 class SharkManager(BaseManager):
     handlers = [SharkActEqualization, SharkLinearQuant, SharkQuantSDPA]
 
-    def __init__(self, config=None):
+    def __init__(self, model = None, config=None, output = None):
         super().__init__()
         if config == None:
             config = dict()
         self.config = config
+        self.model = model
+        self.output = output
+        self.shared_dict = dict()
 
     @classmethod
     def set_export_mode(cls, model: Module, enabled: bool):
@@ -35,6 +38,28 @@ class SharkManager(BaseManager):
         if hasattr(module, 'export_handler') and module.export_handler is not None:
             module.export_handler.layer_name = name
             module.export_handler.shared_dict = shared_dict
+    
+    def __enter__(self):
+        
+
+        for name, module in self.model.named_modules():
+            self.set_export_handler(module, name, self.shared_dict)
+        self.set_export_mode(self.model, enabled=True)
+
+    def __exit__(self, *args, **kwargs):
+        for n, m in self.model.named_modules():
+            if isinstance(m, torch.nn.Module) and len(list(m.children())) == 0:
+                for n_p, p in m.named_parameters():
+                    param_name = n + '.' + n_p
+                    if param_name in self.shared_dict:
+                        continue
+                    self.shared_dict[param_name] = DefaultPrimitiveTensor(name=param_name, data=p)
+
+        self.set_export_mode(self.model, enabled=False)
+
+        theta = Theta(self.shared_dict)
+        ds = Dataset(self.config, theta)
+        self.output.append(ds)
 
     def export(self, model, *model_args, **model_kwargs):
 
