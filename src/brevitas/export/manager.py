@@ -122,7 +122,7 @@ def _set_export_handler(manager_cls, module: Module, instance_type, no_inheritan
 
 
 def _set_layer_export_handler(manager_cls, module: Module):
-    _set_export_handler(manager_cls, module, QuantLayerMixin, no_inheritance=False)
+    _set_export_handler(manager_cls, module, LayerProtocol, no_inheritance=False)
 
 
 def _set_proxy_export_handler(manager_cls, module: Module):

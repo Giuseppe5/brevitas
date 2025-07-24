@@ -1,6 +1,8 @@
 # Copyright (C) 2023, Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from brevitas.nn.equalized_layer import EqualizedModule
+from brevitas.nn.mixin.base import QuantLayerMixin
 from sharktank.types import Dataset
 from sharktank.types import DefaultPrimitiveTensor
 from sharktank.types import Theta
@@ -47,17 +49,36 @@ class SharkManager(BaseManager):
         self.set_export_mode(self.model, enabled=True)
 
     def __exit__(self, *args, **kwargs):
-        for n, m in self.model.named_modules():
-            if isinstance(m, torch.nn.Module) and len(list(m.children())) == 0:
-                for n_p, p in m.named_parameters():
-                    param_name = n + '.' + n_p
-                    if param_name in self.shared_dict:
-                        continue
-                    self.shared_dict[param_name] = DefaultPrimitiveTensor(name=param_name, data=p)
+        tensor_ids = []
+        for v in self.shared_dict.values():
+            if hasattr(v, '_data'):
+                tensor_ids.append(id(v._data))
+        
+        def named_children(model, prefix = ''):
+            for n,m in model.named_children():
+                full_name = prefix + '.' + n if prefix != '' else n
+                if isinstance(m, QuantLayerMixin):
+                    continue
+                elif isinstance(m, EqualizedModule):
+                    continue
+                elif len(list(m.children())) == 0:
+                    for n_p, p in m.named_parameters():
+                        param_name = full_name + '.' + n_p
+                        self.shared_dict[param_name] = DefaultPrimitiveTensor(name=param_name, data=p)
+                else:
+                    named_children(m, prefix = full_name)
+        named_children(self.model)
+        # for n, m in self.model.named_modules():
+        #     if len(list(m.children())) == 0:
+        #         for n_p, p in m.named_parameters():
+        #             param_name = n + '.' + n_p
+        #             if id(p) in tensor_ids or param_name in self.shared_dict:
+        #                 continue
+        #             self.shared_dict[param_name] = DefaultPrimitiveTensor(name=param_name, data=p)
 
         self.set_export_mode(self.model, enabled=False)
-
         theta = Theta(self.shared_dict)
+        print(self.shared_dict.keys())
         ds = Dataset(self.config, theta)
         self.output.append(ds)
 
@@ -76,12 +97,15 @@ class SharkManager(BaseManager):
             if isinstance(m, torch.nn.Module) and len(list(m.children())) == 0:
                 for n_p, p in m.named_parameters():
                     param_name = n + '.' + n_p
-                    if param_name in shared_dict:
+                    param_eq_name = n + '.layer.' + n_p
+                    if param_name in shared_dict or param_eq_name in shared_dict:
+                        print(param_name, param_eq_name)
                         continue
                     shared_dict[param_name] = DefaultPrimitiveTensor(name=param_name, data=p)
 
         self.set_export_mode(model, enabled=False)
 
         theta = Theta(shared_dict)
+        print(shared_dict.keys())
         ds = Dataset(self.config.to_dict(), theta)
         return ds
