@@ -4,7 +4,10 @@
 from typing import Optional
 
 from brevitas.proxy.groupwise_float_parameter_quant import GroupwiseWeightFloatQuantProxyFromInjector
+<<<<<<< HEAD
 from brevitas_examples.stable_diffusion.sd_quant.nn import QuantAttention
+=======
+>>>>>>> 03653239c02f2bef1da03223b6b5f452c98f8652
 from sharktank.types import DefaultPrimitiveTensor
 from sharktank.types import DynamicFp4BlockQuantizer
 from sharktank.types import StaticFp4BlockQuantizer
