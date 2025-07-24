@@ -54,7 +54,8 @@ class SharkActEqualization(nn.Module):
                     name=param_name,
                     data=p)
                 self.shared_dict[param_name] = param
-        self.premul_input = module.scale.weight.contiguous()
+        self.premul_input = module.scale.weight.contiguous().view(module.scale.runtime_shape)
+
         self.premul_module = module.scale
         if hasattr(module, 'offload_params'):
             module.offload_params(module)
@@ -261,6 +262,11 @@ class SharkLinearQuant(nn.Module, SharkWeightQuantMixin, SharkActQuantMixin):
         assert self.shared_dict is not None
 
         quant_weight = self.weight_quant(self.module_weight, self.quant_weight_metadata, self.module_weight)[0]
+        bias = DefaultPrimitiveTensor(
+            name=f"{self.layer_name}.bias",
+            data=self.module_bias,
+        )
+        self.shared_dict[bias.name] = bias
         quant_input = self.act_quant(self.quant_input_metadata, x)[0]
         out = torch.nn.functional.linear(quant_input, quant_weight, self.module_bias)
         quant_out = self.act_quant(self.quant_output_metadata, out)[0]
@@ -308,6 +314,11 @@ class SharkConvQuant(nn.Module, SharkWeightQuantMixin, SharkActQuantMixin):
         assert self.shared_dict is not None
 
         quant_weight = self.weight_quant(self.module_weight, self.quant_weight_metadata, self.module_weight)[0]
+        bias = DefaultPrimitiveTensor(
+            name=f"{self.layer_name}.bias",
+            data=self.module_bias,
+        )
+        self.shared_dict[bias.name] = bias
         quant_input = self.act_quant(self.quant_input_metadata, x)[0]
         out = torch.nn.functional.conv2d(quant_input, quant_weight, self.module_bias, self.stride, self.padding, self.dilation, self.groups)
         quant_out = self.act_quant(self.quant_output_metadata, out)[0]
