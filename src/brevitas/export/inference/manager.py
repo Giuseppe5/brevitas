@@ -9,7 +9,7 @@ from torch.nn import Module
 import torch.nn as nn
 
 from brevitas import torch_version
-from brevitas.export.inference.handler import DynamicFloatInferenceHandler
+from brevitas.export.inference.handler import DynamicFloatInferenceHandler, MXFp4Linear, MXFp4LinearTriton
 from brevitas.export.inference.handler import DynamicIntInferenceHandler
 from brevitas.export.inference.handler import FloatInferencetHandler
 from brevitas.export.inference.handler import FloatWeightInferencetHandler
@@ -20,7 +20,9 @@ from brevitas.export.inference.handler import GroupwiseIntWeightInferenceHandler
 from brevitas.export.inference.handler import IntInferencetHandler
 from brevitas.export.inference.handler import IntWeightInferencetHandler
 from brevitas.export.manager import _set_proxy_export_handler
+from brevitas.export.manager import _set_layer_export_handler
 from brevitas.export.manager import _set_proxy_export_mode
+from brevitas.export.manager import _set_layer_export_mode
 from brevitas.export.manager import _set_recurrent_layer_export_handler
 from brevitas.export.manager import _set_recurrent_layer_export_mode
 from brevitas.export.manager import BaseManager
@@ -60,7 +62,7 @@ class quant_inference_mode:
         self.enabled = enabled
         self.compile = compile
         self.cache_quant_weight = cache_quant_weight
-        self.export_manager = InferenceManager
+        self.export_manager = InferenceClassManager
         self.hook_list = []
         self.return_quant_tensor_state = dict()
 
@@ -85,7 +87,7 @@ class quant_inference_mode:
             # Disable all caching
             # deactivate export mode
             # restore return quant tensor
-            InferenceManager.set_export_mode(self.model, enabled=False)
+            self.export_manager.set_export_mode(self.model, enabled=False)
             self.model.apply(
                 lambda m: _override_bias_caching_mode(m, enabled=False, metadata_only=False))
             self.model.apply(
@@ -105,8 +107,8 @@ class quant_inference_mode:
         # - Disable return quant tensor since all quant metadata is cached
         assert len(self.hook_list) == 1
         self.hook_list[0].remove()
-        self.model.apply(InferenceManager.set_export_handler)
-        InferenceManager.set_export_mode(self.model, enabled=True)
+        self.model.apply(self.export_manager.set_export_handler)
+        self.export_manager.set_export_mode(self.model, enabled=True)
         self.return_quant_tensor_state = QuantizationStatusManager.disable_return_quant_tensor(
             self.model)
         disable_quant_tensor = partial(_override_create_quant_tensor, state=True)
@@ -143,3 +145,14 @@ class InferenceManager(BaseManager):
     def set_export_handler(cls, module: Module):
         _set_proxy_export_handler(cls, module)
         _set_recurrent_layer_export_handler(cls, module)
+
+class InferenceClassManager(BaseManager):
+    handlers=[MXFp4LinearTriton]
+
+    @classmethod
+    def set_export_mode(cls, model: Module, enabled: bool):
+        _set_layer_export_mode(model, enabled)
+
+    @classmethod
+    def set_export_handler(cls, module: Module):
+        _set_layer_export_handler(cls, module)

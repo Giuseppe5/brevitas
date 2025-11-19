@@ -322,12 +322,25 @@ class GroupwiseFloatWeightInferenceHandler(FloatWeightInferencetHandler):
         out = self.dequantize(self.quantize(x, scale, zero_point), scale, zero_point)
         return out
 
+    def quantize_no_expand(self, x):
+        scale = self.scale
+        if scale.shape != ():
+            scale = self.input_view(scale)
+
+        zero_point = self.zero_point
+        if zero_point.shape != ():
+            zero_point = self.input_view(zero_point)
+
+        out = self.inner_forward(x, scale, zero_point)
+        return out
+
     def forward(self, x: Tensor) -> Tuple[Tensor]:
         # In inference mode, we never return quant tensors
         assert self.skip_create_quant_tensor
         if self.cached_weight is not None:
             out = self.cached_weight
         else:
+            inp_shape = x.shape
             scale = self.scale
             if scale.shape != ():
                 scale = self.input_view(scale)
@@ -336,11 +349,11 @@ class GroupwiseFloatWeightInferenceHandler(FloatWeightInferencetHandler):
             if zero_point.shape != ():
                 zero_point = self.input_view(zero_point)
 
-            inp_shape = x.shape
             x = self.input_view(x)
+            out = self.quantize_no_expand(x)
+            # out = self.inner_forward(x, scale, zero_point)
+            out, scale, zp = groupwise_dequant_expand(out, scale, zero_point, self.group_dim, inp_shape)
 
-            out = self.inner_forward(x, scale, zero_point)
-            out = groupwise_dequant_expand(out, scale, zero_point, self.group_dim, inp_shape)[0]
 
         return out, scale, zero_point, self.exponent_bit_width, self.mantissa_bit_width, self.exponent_bias, self.saturating, self.inf_values, self.nan_values
 
@@ -354,3 +367,286 @@ class DynamicFloatInferenceHandler(FloatInferencetHandler):
 
     def forward(self, x: Tensor, unused_scale: Tensor = None) -> Tuple[Tensor]:
         return self.module_forward(x)
+
+import brevitas.nn as qnn
+from aiter.utility import dtypes, fp4_utils
+from aiter.ops.triton.gemm_afp4wfp4 import gemm_afp4wfp4
+from aiter.ops.quant import per_1x32_f4_quant_triton, per_1x32_f4_quant
+import math
+
+# def triton_to_torch(x: torch.Tensor):
+#     # Ensure float32 input
+#     x = x.to(dtype=torch.float32)
+
+#     # amax = tl.max(tl.abs(x), axis=1, keep_dims=True)
+#     amax = x.abs().amax(dim=1, keepdim=True)
+
+#     # amax = amax.to(tl.int32, bitcast=True)
+#     amax_int = amax.view(torch.int32)
+
+#     # amax = (amax + 0x200000).to(tl.uint32, bitcast=True) & 0xFF800000
+#     amax_int = amax_int + 0x200000
+#     amax_int = amax_int & 0xFF800000
+
+#     # amax = amax.to(tl.float32, bitcast=True)
+#     amax = amax_int.view(torch.float32)
+
+#     # scale_e8m0_unbiased = tl.log2(amax).floor() - 2
+#     scale_e8m0_unbiased = torch.floor(torch.log2(amax)) - 2.0
+
+#     # scale_e8m0_unbiased = tl.clamp(scale_e8m0_unbiased, min=-127, max=127)
+#     scale_e8m0_unbiased = torch.clamp(scale_e8m0_unbiased, -127, 127)
+
+#     # quant_scale = tl.exp2(-scale_e8m0_unbiased)
+#     quant_scale = torch.exp2(-scale_e8m0_unbiased)
+
+#     return amax, scale_e8m0_unbiased, quant_scale
+
+
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.utils.run_utils import (
+    set_default_run_config,
+)
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.utils.general_utils import (
+    get_default_scheduling_params,
+    torch_dtype_to_wave,
+)
+from wave_lang.kernel.wave.constraints import (
+    ScaledMMAType,
+)
+
+def get_mxfp4_gemm(shape, c_dtype):
+    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
+    c_wave_dtype = torch_dtype_to_wave(c_dtype)
+    # Input sizes
+    B = tkl.sym.B
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    # Workgroup tile sizes
+    BLOCK_B = tkl.sym.BLOCK_B
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64, vector_shapes={B : 0}, mma_type=mfma_variant
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_afp4_wfp4_wave(
+        a: tkl.Memory[B, M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[B, M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[B, M, N, GLOBAL_ADDRESS_SPACE, tkl.bf16],
+    ):
+        c_reg = tkl.Register[B, M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[B, M, N, tkl.f32]) -> tkl.Register[B, M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        casted = tkw.cast(repeat, c_wave_dtype)
+        tkw.write(casted, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_B: 1,
+        BLOCK_M: 256,
+        BLOCK_N: 128,
+        BLOCK_K: 256,
+        # B: shape[0],
+        # M: shape[1],
+        N: shape[2],
+        K: shape[3],
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    dynamic_symbols = [B, M]
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=SchedulingType.PREFETCH,
+        wave_runtime=False,
+        dump_intermediates="./inter",
+        dynamic_symbols=dynamic_symbols,
+        use_buffer_load_ops=True,
+        use_buffer_store_ops=True,
+        use_stride_cache_swizzle=True,
+        waves_per_eu=1,
+    )
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm_afp4_wfp4_wave)
+    return gemm
+
+class MXFp4LinearBase(torch.nn.Module):
+    handled_layer = qnn.QuantLinear
+
+    def attach_debug_info(self, module: nn.Module):
+        pass
+
+    def __init__(self):
+        super().__init__()
+        self.input_quant = GroupwiseFloatInferenceHandler()
+        self.weight_quant = GroupwiseFloatWeightInferenceHandler()
+
+    def prepare_for_export(self, module: nn.Module):
+        if module.input_quant.is_quant_enabled:
+            self.input_module_forward = module.input_quant.fused_activation_quant_proxy.tensor_quant
+            self.group_dim = module.input_quant.group_dim
+        if module.weight_quant.is_quant_enabled:
+            self.weight_quant.prepare_for_export(module.weight_quant)
+            self.weight = self.pre_quantize_weight(module.weight)
+            self.scale = self.pre_quantize_weight_scale(module.weight_quant.scale)
+
+    @abstractmethod
+    def pre_quantize_weight_scale(self, scale):
+        pass
+
+    @abstractmethod
+    def pre_quantize_weight(self, weight):
+        pass
+
+    @abstractmethod
+    def quantize_inp(self, x: Tensor):
+        pass    
+
+
+class MXFp4Linear(torch.nn.Module):
+    handled_layer = qnn.QuantLinear
+
+    def attach_debug_info(self, module: nn.Module):
+        pass
+
+    def __init__(self):
+        super().__init__()
+        self.input_quant = GroupwiseFloatInferenceHandler()
+        self.weight_quant = GroupwiseFloatWeightInferenceHandler()
+
+    def prepare_for_export(self, module: nn.Module):
+        if module.input_quant.is_quant_enabled:
+            self.input_module_forward = module.input_quant.fused_activation_quant_proxy.tensor_quant
+            self.group_dim = module.input_quant.group_dim
+        if module.weight_quant.is_quant_enabled:
+            self.weight_quant.prepare_for_export(module.weight_quant)
+            self.weight = self.pre_quantize_weight(module.weight)
+            self.scale = self.pre_quantize_scale(self.weight_quant.scale)
+
+    def pre_quantize_scale(self, scale):
+        return scale
+
+    def pre_quantize_weight(self, weight):
+        weight = self.weight_quant(weight)[0]
+        return weight
+
+    def quantize_inp(self, x: Tensor):
+        orig_inp_shape = x.shape
+        x = x.reshape(-1, orig_inp_shape[-1])
+        quantizable_inp_shape = x.shape
+
+        x, xs, zero_point, *other = self.input_module_forward(x)
+        x, xs_expanded = groupwise_dequant_expand(x, xs, zero_point, self.group_dim, quantizable_inp_shape)[0:2]
+
+        return x, xs_expanded
+            
+    def forward(self, x: Tensor) -> Tuple[Tensor]:
+        # In inference mode, we never return quant tensors
+
+        orig_inp_shape = x.shape
+        x = x.reshape(-1, orig_inp_shape[-1])
+
+        x, expanded_x_scale_0 = self.quantize_inp(x)
+
+        weight = self.weight
+
+        out = torch.nn.functional.linear(x, weight)
+        out = out.reshape(*orig_inp_shape[:-1], out.shape[-1])
+        return out
+
+
+
+class MXFp4LinearTriton(torch.nn.Module):
+    handled_layer = qnn.QuantLinear
+
+    def attach_debug_info(self, module: nn.Module):
+        pass
+
+    def __init__(self):
+        super().__init__()
+        self.input_quant = GroupwiseFloatInferenceHandler()
+        self.weight_quant = GroupwiseFloatWeightInferenceHandler()
+
+    def prepare_for_export(self, module: nn.Module):
+        if module.input_quant.is_quant_enabled:
+            self.input_module_forward = module.input_quant.fused_activation_quant_proxy.tensor_quant
+            self.group_dim = module.input_quant.group_dim
+        if module.weight_quant.is_quant_enabled:
+            self.weight_quant.prepare_for_export(module.weight_quant)
+            self.weight = self.pre_quantize_weight(module.weight)
+            self.scale = self.pre_quantize_scale(self.weight_quant.scale)
+
+    def pre_quantize_scale(self, scale):
+        weight_shape = self.weight.shape
+        return self.post_process_quant_triton(scale, weight_shape)
+
+    def pre_quantize_weight(self, weight):
+        weight, scale = self.weight_quant(weight)[0:2]
+        weight = fp4_utils.f32_to_mxfp4((weight/scale).float())
+        return weight
+
+    def post_process_quant_triton(self, scale, inp_shape):
+        # Scale post-process
+        first_shape = inp_shape[0]
+        reshaped_scale = scale.view(first_shape, -1) 
+        expanded_shape = math.ceil(reshaped_scale.shape[0]/256) * 256, math.ceil(reshaped_scale.shape[1]/8) * 8
+        padded_scale = 127 * torch.ones(expanded_shape[0], expanded_shape[1], dtype=torch.uint8, device=reshaped_scale.device)
+        padded_scale[:reshaped_scale.shape[0], :reshaped_scale.shape[1]] = torch.log2(reshaped_scale) + 127
+        padded_scale = padded_scale.view(torch.float8_e8m0fnu)
+        return padded_scale
+
+    def quantize_inp(self, x: Tensor):
+        return per_1x32_f4_quant_triton(x, shuffle=False)
+            
+    def forward(self, x: Tensor) -> Tuple[Tensor]:
+        # In inference mode, we never return quant tensors
+
+        orig_inp_shape = x.shape
+        x = x.reshape(-1, orig_inp_shape[-1])
+        M,K = x.shape
+        N,K = self.weight.shape
+
+        x, expanded_x_scale_0 = self.quantize_inp(x)
+
+        weight = self.weight
+        expanded_w_scale_0 = self.scale
+
+        triton_out = torch.empty(M, N, device="cuda", dtype=torch.bfloat16)
+        gemm_afp4wfp4(x.view(torch.uint8), weight.view(torch.uint8), expanded_x_scale_0.view(torch.uint8), expanded_w_scale_0.view(torch.uint8), torch.bfloat16, triton_out)
+        triton_out = triton_out.reshape(*orig_inp_shape[:-1], triton_out.shape[-1])
+        return triton_out
