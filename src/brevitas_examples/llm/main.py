@@ -8,11 +8,13 @@ import os
 import pprint
 import sys
 
+from brevitas.graph.inference import MXFP4Linear, layerwise_inference, TritonQuant, WeightQuant, TritonGemm
 import numpy as np
 from optimum.exporters.onnx import onnx_export_from_model
 import torch
 from transformers import AutoModelForCausalLM
 from transformers import AutoTokenizer
+torch._dynamo.config.recompile_limit = 100
 
 from brevitas.export.inference.manager import quant_inference_mode
 from brevitas.export.onnx.standard.qcdq.manager import StdQCDQONNXManager
@@ -635,11 +637,17 @@ def quantize_llm(args, extra_args=None):
         # However, it also creates additional tensors that are stored on the CPU, but are cast to the GPU
         # by the zero shot evaluation libraries (e.g., LightEvel), so we remove the `weight_orig` tensors
         # here, if they exist, to save memory.
-        remove_weight_orig(model)
 
+        remove_weight_orig(model)
+        from aiter.ops.quant import per_1x32_f4_quant_triton, per_1x32_f4_quant
+        import brevitas.nn as qnn
+        map = {qnn.QuantLinear: (MXFP4Linear, {'input_quant': TritonQuant(), 'weight_scale': lambda module: per_1x32_f4_quant_triton(module.weight.cuda())[1], 'inference_weights': lambda module: per_1x32_f4_quant_triton(module.weight.cuda())[0], 'gemm_forward': TritonGemm()})}
+        remove_hooks(model)
+        model = layerwise_inference(model, map)
+        offload_model(model)
         if args.eval and not args.no_quantize:
             print("Model eval...")
-            with torch.no_grad(), quant_inference_mode(model, compile=args.compile_eval):
+            with torch.no_grad():#, quant_inference_mode(model, compile=args.compile_eval):
                 model(**calibration_loader[0])
                 quant_ppl = compute_perplexity(
                     model, validation_loader, context_length=args.seqlen // 2, tokenizer=tokenizer)

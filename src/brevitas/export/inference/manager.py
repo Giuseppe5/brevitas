@@ -156,3 +156,32 @@ class InferenceClassManager(BaseManager):
     @classmethod
     def set_export_handler(cls, module: Module):
         _set_layer_export_handler(cls, module)
+
+
+    @classmethod
+    def handler_from_module(cls, module: Module, no_inheritance=False):
+        for handler in cls.handlers:
+            if not isinstance(handler.handled_layer, tuple):
+                handled_classes = (handler.handled_layer,)
+            else:
+                handled_classes = handler.handled_layer
+            if no_inheritance:
+                if type(module) in handled_classes:
+                    return handler
+            else:
+                if any([isinstance(module, handler) for handler in handled_classes]):
+                    return handler
+        return None
+    
+import warnings
+
+def _set_export_handler(manager_cls, module: Module, instance_type, no_inheritance, handler_):
+    if (isinstance(module, instance_type) and hasattr(module, 'export_handler') and
+            module.export_handler is None):
+        handler = manager_cls.handler_from_module(module, no_inheritance)
+        if handler is None and module.requires_export_handler:
+            warnings.warn(f" Skipping module {module.__class__} because it has no handler")
+        elif handler is None and not module.requires_export_handler:
+            pass
+        else:
+            module.export_handler = handler()

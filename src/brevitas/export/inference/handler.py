@@ -419,16 +419,15 @@ from wave_lang.kernel.wave.constraints import (
     ScaledMMAType,
 )
 
-def get_mxfp4_gemm(shape, c_dtype):
+def get_mxfp4_gemm(shape, c_dtype, use_async=False):
     mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
     c_wave_dtype = torch_dtype_to_wave(c_dtype)
     # Input sizes
-    B = tkl.sym.B
     M = tkl.sym.M
     N = tkl.sym.N
     K = tkl.sym.K
+    K_SCALE = tkl.sym.K_SCALE
     # Workgroup tile sizes
-    BLOCK_B = tkl.sym.BLOCK_B
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
@@ -438,29 +437,28 @@ def get_mxfp4_gemm(shape, c_dtype):
     # Expose user-constraints
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64, vector_shapes={B : 0}, mma_type=mfma_variant
+            threads_per_wave=64, waves_per_block=(4, 2, 1), mma_type=mfma_variant
         )
     ]
 
     @tkw.wave(constraints)
     def gemm_afp4_wfp4_wave(
-        a: tkl.Memory[B, M, K / 2, ADDRESS_SPACE, tkl.i8],
-        a_scale: tkl.Memory[B, M, K / 32, ADDRESS_SPACE, tkl.i8],
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
         b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
         b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
-        c: tkl.Memory[B, M, N, GLOBAL_ADDRESS_SPACE, tkl.bf16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.bf16],
     ):
-        c_reg = tkl.Register[B, M, N, tkl.f32](0.0)
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[B, M, N, tkl.f32]) -> tkl.Register[B, M, N, tkl.f32]:
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a)
             a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
             a_scale_reg = tkw.read(a_scale)
@@ -477,33 +475,37 @@ def get_mxfp4_gemm(shape, c_dtype):
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_B: 1,
         BLOCK_M: 256,
-        BLOCK_N: 128,
+        BLOCK_N: 256,
         BLOCK_K: 256,
-        # B: shape[0],
-        # M: shape[1],
-        N: shape[2],
-        K: shape[3],
+        # M: shape[0],
+        N: shape[1],
+        K: shape[2],
+        K_SCALE: shape[2] // 32,
     }
     hyperparams.update(get_default_scheduling_params())
+    dynamic_symbols = [M]
 
-    dynamic_symbols = [B, M]
+    schedule = SchedulingType.PREFETCH
+    if use_async:
+        # TODO: Add scheduling async support
+        schedule = SchedulingType.PREFETCH
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        schedule=SchedulingType.PREFETCH,
-        wave_runtime=False,
+        schedule=schedule,
+        wave_runtime=True,
         dump_intermediates="./inter",
-        dynamic_symbols=dynamic_symbols,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
-        use_stride_cache_swizzle=True,
+        use_buffer_ops=True,
         waves_per_eu=1,
+        use_global_to_shared=use_async,
+        minimize_shared_allocs=False,
+        dynamic_symbols=dynamic_symbols
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm_afp4_wfp4_wave)
     return gemm
+
 
 class MXFp4LinearBase(torch.nn.Module):
     handled_layer = qnn.QuantLinear
@@ -610,6 +612,9 @@ class MXFp4LinearTriton(torch.nn.Module):
             self.weight_quant.prepare_for_export(module.weight_quant)
             self.weight = self.pre_quantize_weight(module.weight)
             self.scale = self.pre_quantize_scale(self.weight_quant.scale)
+        N,K = module.weight.shape
+        wave_shape = (1, N, K)
+        self.gemm = get_mxfp4_gemm(wave_shape, module.weight.dtype)
 
     def pre_quantize_scale(self, scale):
         weight_shape = self.weight.shape
@@ -637,16 +642,21 @@ class MXFp4LinearTriton(torch.nn.Module):
         # In inference mode, we never return quant tensors
 
         orig_inp_shape = x.shape
+        orig_dtype = x.dtype
         x = x.reshape(-1, orig_inp_shape[-1])
         M,K = x.shape
         N,K = self.weight.shape
+        wave_shape = (M, N, K)
 
         x, expanded_x_scale_0 = self.quantize_inp(x)
 
         weight = self.weight
         expanded_w_scale_0 = self.scale
+        # self.gemm = get_mxfp4_gemm(wave_shape, orig_dtype)
 
+        wave_out = torch.empty(M, N, device="cuda", dtype=torch.bfloat16)
         triton_out = torch.empty(M, N, device="cuda", dtype=torch.bfloat16)
+        self.gemm(x.view(torch.uint8), expanded_x_scale_0.view(torch.uint8), weight.view(torch.uint8), expanded_w_scale_0.view(torch.uint8), torch.bfloat16, wave_out)
         gemm_afp4wfp4(x.view(torch.uint8), weight.view(torch.uint8), expanded_x_scale_0.view(torch.uint8), expanded_w_scale_0.view(torch.uint8), torch.bfloat16, triton_out)
         triton_out = triton_out.reshape(*orig_inp_shape[:-1], triton_out.shape[-1])
         return triton_out
