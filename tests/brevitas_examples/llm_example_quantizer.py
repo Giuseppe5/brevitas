@@ -3,13 +3,20 @@ from dataclasses import dataclass
 from torch import nn
 
 from brevitas.quant.scaled_int import Int8ActPerTensorFloat
+from dataclasses import dataclass
+
 from brevitas.quant.scaled_int import Int8WeightPerTensorFloat
 from brevitas.utils.python_utils import Registry
 from brevitas_examples.common.generative.quantizers import BaseQuantizer
 from brevitas_examples.common.generative.quantizers import QUANTIZERS_REGISTRY
 from brevitas_examples.llm.llm_quant.rotation_optimization import GeneralizedTrainer
+<<<<<<< HEAD
 from brevitas_examples.llm.llm_quant.rotation_optimization import TRAINER_SETUP_REGISTRY
 from brevitas_examples.llm.llm_quant.rotation_optimization import TrainerSetup
+=======
+from brevitas_examples.llm.llm_quant.rotation_optimization import TRAINER_REGISTRY
+from brevitas_examples.llm.llm_quant.rotation_optimization import TRAINING_ARGS_REGISTRY
+>>>>>>> Feat (brevitas_examples/llm): custom trainer support
 from brevitas_examples.llm.llm_quant.rotation_optimization import TrainingArguments
 
 
@@ -63,10 +70,15 @@ class ExampleTrainer(GeneralizedTrainer):
     pass
 
 
+<<<<<<< HEAD
+=======
+@Registry.register(TRAINING_ARGS_REGISTRY, "minimal_trainer")
+>>>>>>> Feat (brevitas_examples/llm): custom trainer support
 class RegisteredExampleTrainingArguments(ExampleTrainingArguments):
     pass
 
 
+<<<<<<< HEAD
 class RegisteredExampleTrainer(ExampleTrainer):
     pass
 
@@ -76,3 +88,8 @@ TRAINER_SETUP_REGISTRY.register("minimal_trainer")(
         trainer_cls=RegisteredExampleTrainer,
         training_args_cls=RegisteredExampleTrainingArguments,
     ))
+=======
+@Registry.register(TRAINER_REGISTRY, "minimal_trainer")
+class RegisteredExampleTrainer(ExampleTrainer):
+    pass
+>>>>>>> Feat (brevitas_examples/llm): custom trainer support

@@ -11,6 +11,10 @@ from typing import Dict
 from typing import List
 from typing import Optional
 from typing import Type
+<<<<<<< HEAD
+=======
+import warnings
+>>>>>>> Feat (brevitas_examples/llm): custom trainer support
 
 from accelerate.utils import DistributedType
 from datasets import Dataset
@@ -33,6 +37,184 @@ from brevitas.utils.parametrization_utils import extract_trainable_rotation_matr
 from brevitas.utils.python_utils import Registry
 from brevitas_examples.common.accelerate_utils.accelerate import offload_model
 from brevitas_examples.common.accelerate_utils.accelerate import remove_hooks
+
+# Registries for out-of-source customization of the training process.
+# Users can register custom trainers, training argument classes, and
+# optimizer/scheduler/param configurations via a plugin .py file.
+TRAINER_REGISTRY = Registry[type](registry_name="TrainerRegistry")
+TRAINING_ARGS_REGISTRY = Registry[type](registry_name="TrainingArgsRegistry")
+OPTIMIZER_CONFIG_REGISTRY = Registry[type](registry_name="OptimizerConfigRegistry")
+
+
+class MultiOptimizer(torch.optim.Optimizer):
+    """Wrapper to handle multiple optimizers as a single optimizer for Trainer.
+
+    Allows attaching different optimizer/scheduler pairs to different parameter
+    groups (e.g. CaileySGD for rotation matrices and AdamW for other params).
+
+    Inherits from :class:`torch.optim.Optimizer` (without calling
+    ``super().__init__()``) so that ``isinstance`` checks in ``accelerate``
+    and the HuggingFace ``Trainer`` recognise this object as an optimizer.
+
+    .. note::
+        The HuggingFace ``Trainer`` calls ``model.zero_grad()`` rather than
+        ``optimizer.zero_grad()``, so :meth:`zero_grad` is typically **not**
+        invoked during training.  Sub-optimizers that perform bookkeeping
+        inside ``zero_grad()`` beyond clearing ``.grad`` should be aware of
+        this.
+    """
+
+    def __init__(self, optimizers: List[torch.optim.Optimizer]) -> None:
+        # Intentionally skip super().__init__() — this is a thin wrapper
+        # that delegates all real work to the sub-optimizers.
+        self.optimizers = optimizers
+
+    def zero_grad(self, set_to_none: bool = False) -> None:
+        for optimizer in self.optimizers:
+            optimizer.zero_grad(set_to_none=set_to_none)
+
+    def step(self, closure=None):
+        # If a closure is provided, execute it exactly once before stepping
+        # any sub-optimizer.  Passing the closure to every sub-optimizer would
+        # execute it N times (one full forward+backward per optimizer), which
+        # doubles compute and corrupts accumulated gradients.
+        loss = None
+        if closure is not None:
+            loss = closure()
+        for optimizer in self.optimizers:
+            optimizer.step()
+        return loss
+
+    @property
+    def state(self) -> Dict[str, Any]:
+        # Returns a **snapshot** (shallow copy) of the merged optimizer
+        # states.  Mutations to this dict do not propagate back to the
+        # sub-optimizers.  Keys are parameter objects; if two sub-optimizers
+        # manage the same parameter (a misconfiguration), the later entry
+        # silently wins — detect and raise to prevent silent corruption.
+        merged: Dict[str, Any] = {}
+        for optimizer in self.optimizers:
+            for k, v in optimizer.state.items():
+                if k in merged:
+                    raise RuntimeError(
+                        f"MultiOptimizer.state: parameter {k} appears in "
+                        "multiple sub-optimizers.  Each parameter must belong "
+                        "to exactly one optimizer.")
+                merged[k] = v
+        return merged
+
+    @property
+    def param_groups(self) -> List[Dict[str, Any]]:
+        return [
+            param_group for optimizer in self.optimizers for param_group in optimizer.param_groups]
+
+    @property
+    def defaults(self) -> Dict[str, Any]:
+        # Return the defaults of the first sub-optimizer as a best-effort
+        # approximation.  This is accessed by accelerate's
+        # AcceleratedOptimizer property delegation.
+        if self.optimizers:
+            return self.optimizers[0].defaults
+        return {}
+
+    def state_dict(self) -> Dict[str, Any]:
+        """Return a serialisation-safe state dict for all sub-optimizers."""
+        return {"sub_optimizer_states": [opt.state_dict() for opt in self.optimizers]}
+
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        """Restore state from a dict produced by :meth:`state_dict`."""
+        sub_states = state_dict.get("sub_optimizer_states")
+        if sub_states is None:
+            raise ValueError(
+                "MultiOptimizer.load_state_dict expects a dict with key "
+                "'sub_optimizer_states' containing a list of per-optimizer "
+                "state dicts.")
+        if len(sub_states) != len(self.optimizers):
+            raise ValueError(
+                f"MultiOptimizer.load_state_dict: expected "
+                f"{len(self.optimizers)} sub-optimizer state dicts, "
+                f"got {len(sub_states)}.")
+        for optimizer, sub_state in zip(self.optimizers, sub_states):
+            optimizer.load_state_dict(sub_state)
+
+
+class MultiScheduler:
+    """Wrapper to handle multiple schedulers as a single scheduler for Trainer.
+
+    Schedulers in the list may be ``None`` to indicate no scheduling for the
+    corresponding optimizer.
+
+    Serialisation format
+    --------------------
+    :meth:`state_dict` returns::
+
+        {"sub_scheduler_states": [state_dict_or_none, ...]}
+
+    :meth:`load_state_dict` expects the same structure.
+    """
+
+    def __init__(self, schedulers: List[Optional[Any]]) -> None:
+        self.schedulers = schedulers if schedulers else []
+
+    def step(self, *args, **kwargs) -> None:
+        for scheduler in self.schedulers:
+            if scheduler is not None:
+                scheduler.step(*args, **kwargs)
+
+    def get_last_lr(self) -> List[float]:
+        """Return the concatenation of all schedulers' ``get_last_lr()`` lists.
+
+        ``None`` entries are skipped so that the first real LR occupies
+        index 0 — which is the index the HuggingFace Trainer reads for
+        logging.
+        """
+        lrs: List[float] = []
+        for scheduler in self.schedulers:
+            if scheduler is not None:
+                lrs.extend(scheduler.get_last_lr())
+        return lrs
+
+    def state_dict(self) -> Dict[str, Any]:
+        """Return a serialisation-safe state dict for all sub-schedulers."""
+        return {
+            "sub_scheduler_states": [
+                scheduler.state_dict() if scheduler is not None else None
+                for scheduler in self.schedulers]}
+
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        """Restore state from a dict produced by :meth:`state_dict`.
+
+        Validates the format and length before applying.
+        """
+        if not isinstance(state_dict, dict) or "sub_scheduler_states" not in state_dict:
+            raise ValueError(
+                "MultiScheduler.load_state_dict expects a dict with key "
+                "'sub_scheduler_states' containing a list of per-scheduler "
+                "state dicts (or None entries).")
+        sub_states = state_dict["sub_scheduler_states"]
+        if len(sub_states) != len(self.schedulers):
+            raise ValueError(
+                f"MultiScheduler.load_state_dict: expected "
+                f"{len(self.schedulers)} sub-scheduler state dicts, "
+                f"got {len(sub_states)}.")
+        for scheduler, sub_state in zip(self.schedulers, sub_states):
+            if scheduler is not None and sub_state is not None:
+                scheduler.load_state_dict(sub_state)
+
+
+def _is_fsdp_enabled(training_args: transformers.TrainingArguments) -> bool:
+    """Check whether FSDP is enabled in the training arguments."""
+    fsdp = getattr(training_args, "fsdp", None)
+    # Check if FSDP args are passed
+    if isinstance(fsdp, (list, tuple)):
+        return len(fsdp) > 0 and fsdp != [""]
+    # In case FSDP is launched through `accelerate launch`
+    # with an existing accelerate config, we need to check the accelerator state
+    if not bool(fsdp):
+        from accelerate import Accelerator
+        accelerator = Accelerator()
+        fsdp = hasattr(accelerator.state, "fsdp_plugin")
+    return bool(fsdp)
 
 
 @dataclass
@@ -272,6 +454,53 @@ class GeneralizedTrainer(Trainer):
         self.temperature = args.temperature
         self.kl_loss_reduction = args.kl_loss_reduction
         self.teacher_model = None if teacher_model is None else offload_model(teacher_model)
+
+    def create_optimizer_and_scheduler(self, num_training_steps: int) -> None:
+        """Build optimizer/scheduler from deferred configs when FSDP is active.
+
+        Under FSDP the optimizer cannot be passed to the Trainer constructor
+        because parameter references become stale after FSDP wraps the model.
+        Instead, ``apply_fine_tuning`` stashes the optimizer configs on
+        ``self.args._deferred_optimizer_configs`` and this method builds the
+        optimizer after FSDP wrapping, using ``self.model`` (which now holds
+        the FSDP-wrapped model with valid parameter references).
+        """
+        deferred = getattr(self.args, "_deferred_optimizer_configs", None)
+        if deferred is None:
+            return super().create_optimizer_and_scheduler(num_training_steps)
+
+        del self.args._deferred_optimizer_configs
+
+        if len(deferred) > 1:
+            raise RuntimeError(
+                "FSDP does not support MultiOptimizer (multiple optimizer "
+                "groups).  Use a single optimizer config or disable FSDP.")
+
+        os_args: Optional[List[Dict[str,
+                                    Any]]] = getattr(self.args, "optimizer_scheduler_args", None)
+        if os_args is None or len(os_args) < len(deferred):
+            raise RuntimeError(
+                "optimizer_scheduler_args on training_args does not match "
+                "the deferred optimizer configs.")
+
+        config = deferred[0]
+        params = config["params"]
+        if callable(params):
+            params = params(self.model, self.args)
+        for param in params:
+            param.requires_grad = True
+
+        entry = os_args[0]
+        optimizer_class = config.get("optimizer_class", torch.optim.AdamW)
+        optimizer_kwargs = entry.get("optimizer_kwargs", {})
+        self.optimizer = optimizer_class(params, **optimizer_kwargs)
+
+        scheduler_class = config.get("scheduler_class", None)
+        if scheduler_class is not None:
+            scheduler_kwargs = entry.get("scheduler_kwargs", {})
+            self.lr_scheduler = scheduler_class(self.optimizer, **scheduler_kwargs)
+        else:
+            self.create_scheduler(num_training_steps, optimizer=self.optimizer)
 
     @staticmethod
     def forward_kl_loss(
@@ -521,7 +750,7 @@ def apply_fine_tuning(
         contains trainable rotation matrices (see above).
     """
 
-    # Prepare model for training
+    # Prepare dataset and model for training
     model = _prepare_model(model)
     # Enable skipping training
     if training_args.max_steps <= 0:
@@ -534,8 +763,25 @@ def apply_fine_tuning(
     for param in model.parameters():
         param.requires_grad = False
 
-    # Build optimizer / scheduler pair
-    if optimizer_configs is not None:
+    # Build optimizer / scheduler pair.
+    # Under FSDP, optimizers cannot be passed to the Trainer constructor
+    # because FSDP wraps the model first (invalidating parameter
+    # references).  Instead, the configs are stashed on training_args
+    # and built inside GeneralizedTrainer.create_optimizer_and_scheduler
+    # after FSDP wrapping.
+    fsdp = _is_fsdp_enabled(training_args)
+
+    if fsdp:
+        if optimizer_configs is not None:
+            training_args._deferred_optimizer_configs = optimizer_configs
+        elif extract_trainable_rotation_matrices(model):
+            warnings.warn(
+                "FSDP is not compatible with CaileySGD rotation "
+                "optimization.  Falling back to the Trainer's built-in "
+                "AdamW optimizer for all trainable parameters.",
+                stacklevel=2)
+        optimizers = (None, None)
+    elif optimizer_configs is not None:
         optimizers = _build_optimizers_from_configs(model, training_args, optimizer_configs)
     elif extract_trainable_rotation_matrices(model):
         # Backward-compatible default: CaileySGD on rotation matrices
@@ -547,6 +793,7 @@ def apply_fine_tuning(
 
     trainer_kwargs: Dict[str, Any] = dict(
         model=model,
+        teacher_model=teacher_model,
         tokenizer=tokenizer,
         args=training_args,
         train_dataset=train_dataset,
@@ -564,11 +811,24 @@ def apply_fine_tuning(
         else:
             trainer_cls = Trainer
 
+    if not fsdp:
+        trainer_kwargs["optimizers"] = optimizers
     if callbacks is not None:
         trainer_kwargs["callbacks"] = callbacks
 
     trainer = trainer_cls(**trainer_kwargs)
     trainer.train()
+
+    # Under FSDP the model parameters are sharded across devices.
+    # We must gather the full state dict and load it back into the
+    # original (unwrapped) model so that downstream code
+    # (remove_hooks, offload_model, evaluation) sees a regular
+    # nn.Module with all parameters on a single device.
+    if fsdp:
+        state_dict = trainer.accelerator.get_state_dict(trainer.model)
+        model.load_state_dict(state_dict)
+        model.cpu()
+
     # After finishing training, set eval mode again
     model.eval()
 

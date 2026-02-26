@@ -72,8 +72,15 @@ from brevitas_examples.llm.llm_quant.prepare_for_quantize import make_dynamo_com
 from brevitas_examples.llm.llm_quant.prepare_for_quantize import \
     replace_sdpa_with_quantizable_layers
 from brevitas_examples.llm.llm_quant.rotation_optimization import apply_fine_tuning
+<<<<<<< HEAD
 from brevitas_examples.llm.llm_quant.rotation_optimization import parse_rotation_optimization_args
 from brevitas_examples.llm.llm_quant.rotation_optimization import TRAINER_SETUP_REGISTRY
+=======
+from brevitas_examples.llm.llm_quant.rotation_optimization import OPTIMIZER_CONFIG_REGISTRY
+from brevitas_examples.llm.llm_quant.rotation_optimization import parse_rotation_optimization_args
+from brevitas_examples.llm.llm_quant.rotation_optimization import TRAINER_REGISTRY
+from brevitas_examples.llm.llm_quant.rotation_optimization import TRAINING_ARGS_REGISTRY
+>>>>>>> Feat (brevitas_examples/llm): custom trainer support
 from brevitas_examples.llm.llm_quant.run_utils import fix_rewriter
 from brevitas_examples.llm.llm_quant.svd_quant import apply_svd_quant
 
