@@ -4,9 +4,7 @@
 from contextlib import nullcontext
 from copy import deepcopy
 import functools
-import importlib
 import os
-from pathlib import Path
 import pprint
 import sys
 import warnings
@@ -67,12 +65,15 @@ from brevitas_examples.llm.llm_quant.learned_round_utils import apply_learned_ro
 from brevitas_examples.llm.llm_quant.ln_affine_merge import apply_layernorm_affine_merge
 from brevitas_examples.llm.llm_quant.ln_affine_merge import apply_layernorm_to_rmsnorm
 from brevitas_examples.llm.llm_quant.ln_affine_merge import rmsnorm_patch
+from brevitas_examples.llm.llm_quant.parse_utils import parse_custom_quantizer
+from brevitas_examples.llm.llm_quant.parse_utils import parse_custom_trainer
 from brevitas_examples.llm.llm_quant.prepare_for_quantize import add_zero_bias_to_linear
 from brevitas_examples.llm.llm_quant.prepare_for_quantize import make_dynamo_compatible
 from brevitas_examples.llm.llm_quant.prepare_for_quantize import \
     replace_sdpa_with_quantizable_layers
-from brevitas_examples.llm.llm_quant.rotation_optimization import apply_rotation_optimization
+from brevitas_examples.llm.llm_quant.rotation_optimization import apply_fine_tuning
 from brevitas_examples.llm.llm_quant.rotation_optimization import parse_rotation_optimization_args
+from brevitas_examples.llm.llm_quant.rotation_optimization import TRAINER_SETUP_REGISTRY
 from brevitas_examples.llm.llm_quant.run_utils import fix_rewriter
 from brevitas_examples.llm.llm_quant.svd_quant import apply_svd_quant
 
@@ -136,7 +137,7 @@ def fused_rotation_no_fx(model, calibration_loader, args):
         full_rotation_method=args.rotation_mode,
         return_rewriters=return_rewriters,
         sdpa_regions=args.rotation_sdpa_regions,
-        use_parametrized_rotations=args.optimize_rotations,
+        use_parametrized_rotations=args.fine_tune,
         delay_rewriters=delay_rewriters,
         expansion_step=args.expansion_step,
         layers_to_expand=layers_to_expand,
@@ -241,38 +242,6 @@ def find_equalized_layer(layer):
     return layer
 
 
-def parse_custom_quantizer(quant_name: str) -> str:
-    # Detect "/path/to/plugin.py:quant_name"
-    quant_path = None
-    if ":" in quant_name:
-        path, name = quant_name.rsplit(":", 1)
-        # Treat as a file plugin if paths points to an existing .py file
-        if not Path(path).expanduser().exists():
-            raise FileNotFoundError(f"Quantizer file path {path} does not exist.")
-        if not path.endswith(".py"):
-            raise ValueError(f"{path} is not a .py file.")
-        quant_path = path
-        quant_name = name
-
-    if quant_path is not None:
-        # Retrieve previously registered quantizers
-        pre_registered_quantizers = set(QUANTIZERS_REGISTRY.get_registered_keys())
-        # Load the module with the custom quantizers
-        spec = importlib.util.spec_from_file_location("custom_quant", quant_path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Could not load spec for quantizer path: {quant_path}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        # Retrieve newly registered quantizers
-        post_registered_quantizers = set(QUANTIZERS_REGISTRY.get_registered_keys())
-
-        logging.debug(
-            f"The following quantizers were loaded from {quant_path}: {', '.join(post_registered_quantizers - pre_registered_quantizers)}"
-        )
-
-    return quant_name
-
-
 def quantize_llm(args, extra_args=None):
     validate(args, extra_args)
     set_seed(args.seed)
@@ -328,11 +297,34 @@ def quantize_llm(args, extra_args=None):
 
     validation_loader = DataLoader(dataset=validation_dataset, batch_size=1, collate_fn=collate_fn)
 
-    if args.optimize_rotations:
-        # Extra arguments should be used as training arguments for rotation optimization
-        rot_optimization_args = parse_rotation_optimization_args(extra_args=extra_args)
-        # Load the data for rotation optimization
-        rot_calibration_dataset = get_dataset_for_model(
+    if args.fine_tune:
+        # Load custom training plugin if specified
+        custom_trainer_config_name = None
+        custom_trainer_cls = None
+        custom_callbacks = None
+        custom_optimizer_configs = None
+        custom_training_args_cls = None
+
+        if args.custom_trainer is not None:
+            custom_trainer_config_name = parse_custom_trainer(args.custom_trainer)
+            # Look up the registered TrainerSetup by config name.  It bundles
+            # the (required) trainer class with the optional training-args
+            # class and optimizer setup -- the user only needs to populate
+            # what they want to customise.
+            trainer_setup = TRAINER_SETUP_REGISTRY.get(custom_trainer_config_name)
+            custom_trainer_cls = trainer_setup.trainer_cls
+            custom_training_args_cls = trainer_setup.training_args_cls
+            custom_optimizer_configs = trainer_setup.optimizer_setup
+            # The optimizer setup can be a callable that returns the list of
+            # configs (deferred construction), or a list directly.
+            if callable(custom_optimizer_configs):
+                custom_optimizer_configs = custom_optimizer_configs()
+
+        # Extra arguments should be used as training arguments
+        training_args = parse_rotation_optimization_args(
+            extra_args=extra_args, training_args_cls=custom_training_args_cls)
+        # Load the data for training
+        train_dataset = get_dataset_for_model(
             bos_preprocessing=args.bos_preprocessing,
             dataset_name=args.dataset,
             tokenizer=tokenizer,
@@ -402,7 +394,7 @@ def quantize_llm(args, extra_args=None):
             orphan_sink=args.rotation_orphan_sink,
             full_rotation_method=args.rotation_mode,
             sdpa_regions=args.rotation_sdpa_regions,
-            use_parametrized_rotations=args.optimize_rotations,
+            use_parametrized_rotations=args.fine_tune,
             expansion_step=args.expansion_step,
             layers_to_expand=layers_to_expand,
             rotation_block_size=args.rotation_block_size,
@@ -611,21 +603,25 @@ def quantize_llm(args, extra_args=None):
             apply_calibration(model, calibration_loader)
             print("Act calibration applied.")
 
-        if args.optimize_rotations:
+        if args.fine_tune:
             if args.load_checkpoint:
-                rot_optimization_args.max_steps = 0
-            apply_rotation_optimization(
+                training_args.max_steps = 0
+            apply_fine_tuning(
                 model=model,
                 tokenizer=tokenizer,
-                train_dataset=rot_calibration_dataset,
-                training_args=rot_optimization_args,
-                collate_fn=collate_fn)
-            # Remove hooks from optimization
+                train_dataset=train_dataset,
+                training_args=training_args,
+                collate_fn=collate_fn,
+                trainer_cls=custom_trainer_cls,
+                callbacks=custom_callbacks,
+                optimizer_configs=custom_optimizer_configs)
+            # Remove hooks from training
             remove_hooks(model)
-            # Offload model before fusing the rotations
             model = offload_model(model)
-            # Fuse rotations with weights
-            model = fuse_parametrizations(model)
+            # Fuse rotation parametrizations with weights when rotations
+            # were used (the function is a no-op when there are none).
+            if args.rotation is not None:
+                model = fuse_parametrizations(model)
 
         if args.svd_quant:
             print("Apply SVDQuant...")
