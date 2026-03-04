@@ -27,6 +27,7 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import is_layer_s
 
 import brevitas.config as config
 from brevitas.export.inference.vLLM.layer import QuantLinear
+from brevitas.export.inference.vLLM.layer import QOPQuantLinear
 from brevitas.export.manager import _set_proxy_export_handler
 from brevitas.export.manager import _set_proxy_export_mode
 from brevitas.export.manager import _set_recurrent_layer_export_handler
@@ -112,7 +113,7 @@ class QuantConfigBrevitas(QuantizationConfig):
                         self.config[layer].get('weight_quant', None) for layer in layers_to_merge]
                     quant_configs["weight_config"] = weight_config
 
-                return QuantLinear(quant_configs=quant_configs)
+                return QOPQuantLinear(quant_configs=quant_configs)
 
         elif isinstance(layer, LinearBase):
             return UnquantizedLinearMethod()

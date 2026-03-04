@@ -157,3 +157,93 @@ class QuantLinear(LinearMethodBase):
         y = torch.nn.functional.linear(x, layer.weight, bias)
         y = self.output_quant(y)
         return y
+
+
+import math
+
+from aiter.ops.triton.quant.fused_mxfp4_quant import fused_flatten_mxfp4_quant
+from aiter.ops.triton.quant.quant import dynamic_mxfp4_quant
+
+from aiter.ops.triton.gemm.batched import batched_gemm_afp4wfp4
+from aiter.ops.triton.gemm.basic.gemm_afp4wfp4 import gemm_afp4wfp4
+
+from aiter.utility import dtypes
+from aiter.utility import fp4_utils
+
+
+class QOPQuantLinear(QuantLinear):
+
+    def __init__(self, quant_configs: Optional[Dict[str, Any]] = None):
+
+        weight_config = quant_configs["weight_config"]
+        if isinstance(weight_config, list):
+            self.weight_quant = {
+                i: self.configure_proxy(config) for i, config in enumerate(weight_config)}
+            self.weight_scale = torch.cat([x.scale for x in self.weight_quant.values()])
+        else:
+            self.weight_quant = self.configure_proxy(weight_config)
+            self.weight_scale = self.weight_quant.scale
+        self.init_weight = False
+        self.input_quant = self.quantize_inp
+
+    def quantize_inp(self, x):
+        return dynamic_mxfp4_quant(x)
+
+    def post_process_quant_triton(self, scale, inp_shape):
+        # Scale post-process
+        first_shape = inp_shape[0]
+        reshaped_scale = scale.view(first_shape, -1)
+        expanded_shape = math.ceil(reshaped_scale.shape[0]/256) * 256, math.ceil(reshaped_scale.shape[1]/8) * 8
+        padded_scale = 127 * torch.ones(
+            expanded_shape[0], expanded_shape[1], dtype=torch.uint8, device=reshaped_scale.device)
+        padded_scale[:reshaped_scale.shape[0], :reshaped_scale
+                     .shape[1]] = torch.log2(reshaped_scale) + 127
+        padded_scale = padded_scale.view(torch.float8_e8m0fnu)
+        return padded_scale
+
+    def process_weights_after_loading(self, module: torch.nn.Module) -> None:
+        weight = module.weight.data
+        for i in range(len(self.output_partition_sizes)):
+            logical_widths = list(self.output_partition_sizes)
+            start_idx = sum(logical_widths[:i])
+            end_idx = start_idx + logical_widths[i]
+            if isinstance(self.weight_quant, dict):
+                weight_quant = self.weight_quant[i]
+            else:
+                weight_quant = self.weight_quant
+
+            weight[start_idx:end_idx] = weight_quant.quantize_forward(weight[start_idx:end_idx])[0]
+        weight_shape = module.weight.shape
+        self.weight_scale = self.post_process_quant_triton(self.weight_scale, weight_shape)
+
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+
+        orig_inp_shape = x.shape
+        orig_dtype = x.dtype
+        x = x.reshape(-1, orig_inp_shape[-1])
+        M, K = x.shape
+        N, K = layer.weight.shape
+
+        weight = fp4_utils.f32_to_mxfp4(layer.weight.data.float())
+
+        weight_scale = self.weight_scale
+        x, x_scale = self.input_quant(x)
+
+        bias = self.bias_quant(bias) if bias is not None else None
+        y = torch.empty(M, N, device="cuda", dtype=torch.bfloat16)
+        gemm_afp4wfp4(
+            x.view(torch.uint8),
+            weight.view(torch.uint8),
+            x_scale.view(torch.uint8),
+            weight_scale.view(torch.uint8),
+            torch.bfloat16,
+            y)
+        y = y.reshape(*orig_inp_shape[:-1], y.shape[-1])
+        if bias is not None:
+            y = y + bias
+        return y

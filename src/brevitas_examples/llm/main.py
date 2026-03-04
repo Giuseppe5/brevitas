@@ -198,6 +198,7 @@ def model_export(model, tokenizer, ref_input, args, config=None):
     elif args.export_target == 'vllm':
         from brevitas.export.inference.vLLM.manager import vLLMExportManager
 
+        model = offload_model(model)
         with quant_inference_mode(model, export_manager=vLLMExportManager) as export_mode:
             model(**ref_input)
             export_mode.export_manager.export(model, tokenizer, args.export_prefix)
