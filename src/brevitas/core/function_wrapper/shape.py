@@ -193,7 +193,7 @@ def dynamic_over_sub_channel_block_view(
         x: torch.Tensor, group_size: int, group_dim: int) -> torch.Tensor:
     # Pad the tensor to ensure the dimension is divisible by group_size
 
-    # x = padding_to_multiple(x, group_dim, group_size)
+    x = padding_to_multiple(x, group_dim, group_size)
 
     # Calculate the number of groups
     num_groups = x.shape[group_dim] // group_size
