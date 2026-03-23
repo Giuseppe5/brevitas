@@ -451,6 +451,15 @@ def quantize_llm(args, extra_args=None):
 
     if not args.no_quantize:
         name_blacklist = []
+        if args.no_quantize_layers_list:
+            for name, _ in model.named_modules():
+                if any(name.endswith(suffix) for suffix in args.no_quantize_layers_list):
+                    name_blacklist.append(name)
+            if name_blacklist:
+                print(
+                    f"Skipping quantization for layers matching "
+                    f"--no-quantize-layers-list {args.no_quantize_layers_list}: "
+                    f"{name_blacklist}")
         print("Applying model quantization...")
         # When AWQ is enabled, the scaling_impl_type for the weights needs to be 'stats', as the
         # scaling factor that multiplies the weights is optimized

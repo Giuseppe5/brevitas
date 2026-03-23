@@ -470,6 +470,26 @@ class LLMQuantLayerTypeCases:
                     "<class 'brevitas.core.restrict_val.SignedFloatRestrictValue'>",
                 },
             },
+        {
+            "model": "hf-internal-testing/tiny-random-MistralForCausalLM",
+            "no_quantize_layers_list": ["q_proj"],
+            "exp_layer_types": {
+                "model.layers.0.self_attn.q_proj":
+                    "<class 'torch.nn.modules.linear.Linear'>",
+                "model.layers.0.self_attn.k_proj":
+                    "<class 'brevitas.nn.quant_linear.QuantLinear'>",},
+        },
+        {
+            "model": "hf-internal-testing/tiny-random-MistralForCausalLM",
+            "no_quantize_layers_list": ["q_proj", "k_proj"],
+            "exp_layer_types": {
+                "model.layers.0.self_attn.q_proj":
+                    "<class 'torch.nn.modules.linear.Linear'>",
+                "model.layers.0.self_attn.k_proj":
+                    "<class 'torch.nn.modules.linear.Linear'>",
+                "model.layers.0.self_attn.v_proj":
+                    "<class 'brevitas.nn.quant_linear.QuantLinear'>",},
+        },
         ],
         ids=[
             "mistral-int8",
@@ -484,6 +504,8 @@ class LLMQuantLayerTypeCases:
             "opt-quant-sdpa",
             "llama-mxfp8-mse",
             "mistral-fp8_ocp-signed",
+            "mistral-int8-no-quant-layers-single",
+            "mistral-int8-no-quant-layers-multi",
         ],)
     def case_small_models_quant_layer(self, run_dict, default_run_args, request):
         yield process_args_and_metrics(default_run_args, run_dict, extra_keys=["exp_layer_types"])
@@ -628,6 +650,22 @@ class LLMQuantLayerCountCases:
             "exp_layer_types_count": {
                 "<class 'brevitas_examples.common.svd_quant.ErrorCorrectedModule'>": 14,
                 "<class 'brevitas.nn.quant_linear.QuantLinear'>": 14,}},
+        {
+            "model": "hf-internal-testing/tiny-random-MistralForCausalLM",
+            "no_quantize_layers_list": ["q_proj"],
+            "exp_layer_types_count": {
+                "<class 'torch.nn.modules.linear.Linear'>": 3,  # LM Head + 2x q_proj
+                "<class 'brevitas.nn.quant_linear.QuantLinear'>":
+                    12,  # K/V/O projs + Up/Gate/Down projs
+            }},
+        {
+            "model": "hf-internal-testing/tiny-random-MistralForCausalLM",
+            "no_quantize_layers_list": ["q_proj", "k_proj"],
+            "exp_layer_types_count": {
+                "<class 'torch.nn.modules.linear.Linear'>": 5,  # LM Head + 2x q_proj + 2x k_proj
+                "<class 'brevitas.nn.quant_linear.QuantLinear'>":
+                    10,  # V/O projs + Up/Gate/Down projs
+            }},
         ],
         ids=[
         "mistral-int8",
@@ -640,7 +678,9 @@ class LLMQuantLayerCountCases:
         "llama-rotation-mixed-fx",
         "llama-rotation-full-fx",
         "llama-rotation-full-fx-sdpa",
-        "llama-int8-svd_quant"],)
+        "llama-int8-svd_quant",
+        "mistral-int8-no-quant-layers-single",
+        "mistral-int8-no-quant-layers-multi"],)
     def case_small_models_quant_layer_types_count(self, run_dict, default_run_args, request):
         yield process_args_and_metrics(default_run_args, run_dict, extra_keys=["exp_layer_types_count"])
 

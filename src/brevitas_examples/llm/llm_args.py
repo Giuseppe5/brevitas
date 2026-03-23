@@ -266,6 +266,14 @@ def create_args_parser() -> ArgumentParser:
         '--quantize-input-zero-point', action='store_true', help='Quantize input zero-point.')
     parser.add_argument(
         '--quantize-last-layer', action='store_true', help='Quantize last nn.Linear layer.')
+    parser.add_argument(
+        '--no-quantize-layers-list',
+        type=str,
+        default=[],
+        nargs='*',
+        help='A list of layer name suffixes to exclude from quantization (both weights and inputs). '
+        'Any layer whose full module name ends with one of the provided suffixes will not be '
+        'quantized. Default: %(default)s')
     parser.add_argument('--magr', action='store_true', help='Apply MagR.')
     parser.add_argument(
         '--magr-alpha', type=float, default=0.01, help='Alpha for MagR. Default: 0.01.')
@@ -524,6 +532,9 @@ def validate(args: Namespace, extra_args: Optional[List[str]] = None) -> None:
     elif args.rotation == 'fused_no_fx':
         assert not args.convert_layernorm_to_rmsnorm, 'LayerNorm is automatically replaced with RMSNorm when running with --rotation=fused_no_fx. Remove the flag --convert-layernorm-to-rmsnorm'
         assert args.replace_rmsnorm, 'Graph rotation requires to replace HF RMSNorm with PyTorch ones (torch 2.4+ require)'
+    if args.no_quantize_layers_list:
+        assert all(s != '' for s in args.no_quantize_layers_list), \
+            "Empty strings are not allowed in --no-quantize-layers-list."
     if not args.no_quantize:
         if args.weight_quant_rescaling_init is not None:
             assert args.weight_quant_rescaling_init > 0, \
