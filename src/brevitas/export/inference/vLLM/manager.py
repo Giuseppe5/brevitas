@@ -26,8 +26,10 @@ from vllm.model_executor.layers.quantization.base_config import QuantizationConf
 from vllm.model_executor.layers.quantization.utils.quant_utils import is_layer_skipped
 
 import brevitas.config as config
-from brevitas.export.inference.vLLM.layer import QuantLinear
 from brevitas.export.inference.vLLM.layer import QOPQuantLinear
+from brevitas.export.inference.vLLM.layer import QOPQuantLinearMXFP4
+from brevitas.export.inference.vLLM.layer import QOPQuantLinearMXFP8
+from brevitas.export.inference.vLLM.layer import QuantLinear
 from brevitas.export.manager import _set_proxy_export_handler
 from brevitas.export.manager import _set_proxy_export_mode
 from brevitas.export.manager import _set_recurrent_layer_export_handler
@@ -46,6 +48,47 @@ from ..handler import IntWeightInferencetHandler
 from .handler import vLLMDynamicPerRowFloatInferenceHandler
 from .handler import vLLMGroupwiseFloatInferenceHandler
 from .handler import vLLMGroupwiseIntInferenceHandler
+
+# MXFP4: exponent_bit_width=2, mantissa_bit_width=1 (E2M1)
+_MXFP4_EXPONENT_BIT_WIDTH = 2
+_MXFP4_MANTISSA_BIT_WIDTH = 1
+
+
+def _resolve_qop_class(quant_configs):
+    """Select the appropriate QOP linear class based on weight quantization format.
+
+    Inspects the weight config's mantissa and exponent bit widths to determine
+    whether to use MXFP4 or MXFP8 precision.
+    """
+    weight_config = quant_configs.get("weight_config", None)
+    if weight_config is None:
+        return QOPQuantLinearMXFP4
+
+    # For merged layers, inspect the first sub-layer config
+    if isinstance(weight_config, list):
+        first_config = weight_config[0]
+    else:
+        first_config = weight_config
+
+    if first_config is None:
+        return QOPQuantLinearMXFP4
+
+    mantissa_bw = first_config.get('mantissa_bit_width', None)
+    exponent_bw = first_config.get('exponent_bit_width', None)
+
+    if mantissa_bw is not None and exponent_bw is not None:
+        # Convert tensor values if needed
+        if isinstance(mantissa_bw, torch.Tensor):
+            mantissa_bw = mantissa_bw.item()
+        if isinstance(exponent_bw, torch.Tensor):
+            exponent_bw = exponent_bw.item()
+        if (int(exponent_bw) == _MXFP4_EXPONENT_BIT_WIDTH and
+                int(mantissa_bw) == _MXFP4_MANTISSA_BIT_WIDTH):
+            return QOPQuantLinearMXFP4
+        else:
+            return QOPQuantLinearMXFP8
+
+    return QOPQuantLinearMXFP4
 
 
 @register_quantization_config("quant_brevitas")
@@ -113,7 +156,8 @@ class QuantConfigBrevitas(QuantizationConfig):
                         self.config[layer].get('weight_quant', None) for layer in layers_to_merge]
                     quant_configs["weight_config"] = weight_config
 
-                return QOPQuantLinear(quant_configs=quant_configs)
+                qop_class = _resolve_qop_class(quant_configs)
+                return qop_class(quant_configs=quant_configs)
 
         elif isinstance(layer, LinearBase):
             return UnquantizedLinearMethod()
