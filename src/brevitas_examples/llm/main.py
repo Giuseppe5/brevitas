@@ -4,6 +4,7 @@
 from contextlib import nullcontext
 from copy import deepcopy
 import functools
+import json
 import os
 import pprint
 import sys
@@ -11,6 +12,7 @@ import warnings
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM
 from transformers import AutoTokenizer
@@ -610,19 +612,6 @@ def quantize_llm(args, extra_args=None):
             apply_calibration(model, calibration_loader)
             print("Act calibration applied.")
 
-        if args.fine_tune:
-            if args.load_checkpoint:
-                training_args.max_steps = 0
-            apply_fine_tuning(
-                model=model,
-                tokenizer=tokenizer,
-                train_dataset=train_dataset,
-                training_args=training_args,
-                collate_fn=collate_fn,
-                trainer_cls=custom_trainer_cls,
-                callbacks=custom_callbacks,
-                optimizer_configs=custom_optimizer_configs)
-            # Remove hooks from training
             remove_hooks(model)
             model = offload_model(model)
             # Fuse rotation parametrizations with weights when rotations
@@ -707,6 +696,51 @@ def quantize_llm(args, extra_args=None):
             apply_bias_correction(model, calibration_loader)
             print("Bias correction applied.")
 
+        if args.fine_tune:
+            if args.load_checkpoint:
+                training_args.max_steps = 0
+
+            # Under FSDP, fully_shard wraps the model in-place and its
+            # parameters become DTensors that cannot be reverted.  We
+            # keep a clean CPU copy to load the trained weights into.
+            copied_model = deepcopy(model.cpu())
+
+            fsdp_state_dict = apply_fine_tuning(
+                model=model,
+                tokenizer=tokenizer,
+                train_dataset=train_dataset,
+                training_args=training_args,
+                collate_fn=collate_fn,
+                trainer_cls=custom_trainer_cls,
+                callbacks=custom_callbacks,
+                optimizer_configs=custom_optimizer_configs)
+
+            if fsdp_state_dict is not None:
+                # FSDP path: get_state_dict returns the full dict only
+                # on rank 0; other ranks get an empty dict.
+                if not dist.is_initialized() or dist.get_rank() == 0:
+                    copied_model.load_state_dict(fsdp_state_dict)
+                del model
+                model = copied_model
+            else:
+                # Non-FSDP path: model was updated in-place.
+                del copied_model
+
+            # Tear down the distributed process group that was used for
+            # FSDP training.  After this point only rank 0 does real
+            # work; other ranks exit early (hopefully, gracefully).
+            rank = dist.get_rank() if dist.is_initialized() else 0
+            if dist.is_initialized():
+                dist.barrier()
+                dist.destroy_process_group()
+            if rank != 0:
+                sys.exit(0)
+            torch.cuda.empty_cache()
+
+        remove_hooks(model)
+        model.eval()
+        model = offload_model(model)
+
         # We restore the original behaviour of the post-forward.
         for k, v in dict_hooks.items():
             k._hf_hook.post_forward = v
@@ -734,7 +768,7 @@ def quantize_llm(args, extra_args=None):
                 wrapped_model = HFLM(
                     pretrained=model,
                     add_bos_token=args.bos_preprocessing is not None,
-                    batch_size=batch_size)  # need to wrap for LLM eval
+                    batch_size=batch_size)
                 few_shot_eval_results = evaluator.simple_evaluate(
                     model=wrapped_model,
                     model_args=None,
@@ -749,10 +783,12 @@ def quantize_llm(args, extra_args=None):
             print("Few shot eval results")
             pprint.pprint(few_shot_eval_results)
         elif args.few_shot_eval == 'lighteval':
-
             with torch.no_grad(), quant_inference_mode(model, compile=args.compile_eval):
                 model(**next(iter(calibration_loader)))
+                # lighteval expects a plain nn.Module on a single device,
+                # not an offloaded model with AlignDevicesHook.
                 remove_hooks(model)
+                model = model.to("cuda:0")
 
                 from brevitas_examples.llm.eval_lighteval import run_lighteval
                 few_shot_eval_results = run_lighteval(
@@ -763,8 +799,8 @@ def quantize_llm(args, extra_args=None):
                     batch_size=args.few_shot_override_batch_size,
                     max_samples=args.few_shot_limit,
                 )
-            # Print nicely formatted results
             pprint.pprint(few_shot_eval_results)
+
         remove_hooks(model)
         if args.checkpoint_name is not None and not args.load_checkpoint:
             print(f"Saving checkpoint to {args.checkpoint_name}")
@@ -776,7 +812,16 @@ def quantize_llm(args, extra_args=None):
             model = model.to(dtype=torch.float32)
             model_export(model, tokenizer, next(iter(calibration_loader)), args, config)
 
-    return {"float_ppl": float_ppl, "quant_ppl": quant_ppl, **few_shot_eval_results}, model
+    results = {"float_ppl": float_ppl, "quant_ppl": quant_ppl, **few_shot_eval_results}
+
+    if getattr(args, "job_folder", None) is not None:
+        os.makedirs(args.job_folder, exist_ok=True)
+        results_path = os.path.join(args.job_folder, "results.json")
+        with open(results_path, 'w') as f:
+            json.dump(results, f)
+        print(f"Results written to {results_path}")
+
+    return results, model
 
 
 def main():

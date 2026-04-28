@@ -214,7 +214,7 @@ class BrevitasPipeline(Pipeline):
         wrapped_model = TransformersModel.from_model(
             model=model,
             config=model_config,
-            accelerator=self.accelerator,
+            accelerator=None #self.accelerator,
         )
 
         # Restore the original pad_token if the model explicitly defined one
@@ -256,7 +256,7 @@ def run_lighteval(
     full_path = os.path.join(parent_folder, 'eval_lighteval.py')
 
     pipeline_params = PipelineParameters(
-        launcher_type=ParallelismManager.ACCELERATE,
+        launcher_type=None, #ParallelismManager.ACCELERATE,
         max_samples=max_samples,
         custom_tasks_directory=full_path)
 

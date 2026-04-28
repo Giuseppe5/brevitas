@@ -673,11 +673,7 @@ class LLMRotationOptimizationCases:
                     "1",
                     "--gradient_accumulation_steps",
                     "1"],
-<<<<<<< HEAD
                 "float_ppl": 30795.76953125,
-=======
-                "float_ppl": 32428.475,
->>>>>>> Feat (brevitas_examples/llm): custom trainer support
                 "quant_ppl": 32265.172,
                 "exp_layer_types_count": {
                     "<class 'brevitas.nn.equalized_layer.RotatedModule'>": 0,

@@ -19,6 +19,7 @@ import warnings
 from accelerate.utils import DistributedType
 from datasets import Dataset
 import torch
+from torch.distributed._composable.fsdp import fully_shard
 import torch.nn.functional as F
 import transformers
 from transformers import Trainer
@@ -203,18 +204,31 @@ class MultiScheduler:
 
 
 def _is_fsdp_enabled(training_args: transformers.TrainingArguments) -> bool:
-    """Check whether FSDP is enabled in the training arguments."""
-    fsdp = getattr(training_args, "fsdp", None)
-    # Check if FSDP args are passed
-    if isinstance(fsdp, (list, tuple)):
-        return len(fsdp) > 0 and fsdp != [""]
-    # In case FSDP is launched through `accelerate launch`
-    # with an existing accelerate config, we need to check the accelerator state
-    if not bool(fsdp):
-        from accelerate import Accelerator
-        accelerator = Accelerator()
-        fsdp = hasattr(accelerator.state, "fsdp_plugin")
-    return bool(fsdp)
+    """Check whether FSDP is enabled.
+
+    Covers two configuration paths:
+
+    1. ``training_args.fsdp`` is set (e.g. ``--fsdp full_shard`` passed
+       as a HuggingFace ``TrainingArguments`` CLI arg when running under
+       ``torchrun``).
+    2. ``ACCELERATE_USE_FSDP=true`` is in the environment, which causes
+       ``Accelerator()`` to build and attach a ``fsdp_plugin`` to its
+       shared state.  This is the path used by ``accelerate launch``.
+    """
+    # Path 1: FSDP configured via HuggingFace TrainingArguments
+    # (e.g. torchrun ... main.py --fsdp full_shard)
+    fsdp_arg = getattr(training_args, "fsdp", None)
+    if isinstance(fsdp_arg, (list, tuple)):
+        if len(fsdp_arg) > 0 and fsdp_arg != [""]:
+            return True
+    elif bool(fsdp_arg):
+        return True
+
+    # Path 2: FSDP configured via accelerate launch / env var
+    from accelerate import Accelerator
+    accelerator = Accelerator()
+    fsdp_plugin = getattr(accelerator.state, "fsdp_plugin", None)
+    return fsdp_plugin is not None
 
 
 @dataclass
@@ -453,7 +467,7 @@ class GeneralizedTrainer(Trainer):
         self.gamma = args.gamma
         self.temperature = args.temperature
         self.kl_loss_reduction = args.kl_loss_reduction
-        self.teacher_model = None if teacher_model is None else offload_model(teacher_model)
+        self.teacher_model = teacher_model
 
     def create_optimizer_and_scheduler(self, num_training_steps: int) -> None:
         """Build optimizer/scheduler from deferred configs when FSDP is active.
@@ -564,6 +578,36 @@ class GeneralizedTrainer(Trainer):
             loss = self.gamma * loss + (1. - self.gamma) * distill_loss
 
         return (loss, outputs) if return_outputs else loss
+
+    def _wrap_model(self, model, training=True, dataloader=None):
+        wrapped = super()._wrap_model(model, training, dataloader)
+        if self.teacher_model is not None and self.is_fsdp_enabled:
+            # Shard the teacher model bottom-up (per decoder layer,
+            # then root), mirroring how the student is sharded by
+            # FSDP2's fully_shard.  The FSDP1 set_auto_wrap_policy
+            # helper has no effect on fully_shard, so we resolve the
+            # transformer layer class ourselves and iterate manually.
+            fsdp_plugin = self.accelerator.state.fsdp_plugin
+            cls_names = getattr(fsdp_plugin, "transformer_cls_names_to_wrap", None)
+            if not cls_names:
+                no_split = getattr(self.teacher_model, "_no_split_modules", None)
+                cls_names = list(no_split) if no_split else []
+
+            from accelerate.utils.dataclasses import get_module_class_from_name
+            layer_classes = set()
+            for name in cls_names:
+                cls = get_module_class_from_name(self.teacher_model, name)
+                if cls is not None:
+                    layer_classes.add(cls)
+            layer_classes = tuple(layer_classes)
+
+            # Apply fully_shard bottom-up: per decoder layer first
+            for module in self.teacher_model.modules():
+                if layer_classes and isinstance(module, layer_classes):
+                    fully_shard(module)
+            # Then shard the root
+            fully_shard(self.teacher_model)
+        return wrapped
 
 
 def parse_rotation_optimization_args(
@@ -699,7 +743,7 @@ def apply_fine_tuning(
         collate_fn: Callable,
         trainer_cls: Optional[Type[Trainer]] = None,
         callbacks: Optional[List[Any]] = None,
-        optimizer_configs: Optional[List[Dict[str, Any]]] = None) -> None:
+        optimizer_configs: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     """Fine-tune model weights and/or rotation matrices.
 
     This is the unified training entry point.  When *optimizer_configs*
@@ -791,6 +835,12 @@ def apply_fine_tuning(
         # Trainer use its built-in optimizer.
         optimizers = (None, None)
 
+    teacher_model = None
+    if training_args.use_distillation_loss:
+        teacher_model = copy.deepcopy(model.cpu())
+        for p in teacher_model.parameters():
+            p.requires_grad_(False)
+
     trainer_kwargs: Dict[str, Any] = dict(
         model=model,
         teacher_model=teacher_model,
@@ -813,24 +863,25 @@ def apply_fine_tuning(
 
     if not fsdp:
         trainer_kwargs["optimizers"] = optimizers
+        
     if callbacks is not None:
         trainer_kwargs["callbacks"] = callbacks
 
     trainer = trainer_cls(**trainer_kwargs)
     trainer.train()
 
-    # Under FSDP the model parameters are sharded across devices.
-    # We must gather the full state dict and load it back into the
-    # original (unwrapped) model so that downstream code
-    # (remove_hooks, offload_model, evaluation) sees a regular
-    # nn.Module with all parameters on a single device.
+    # Under FSDP2, fully_shard wraps the model in-place, converting
+    # parameters to DTensors.  There is no public API to reverse this.
+    # We gather the full state dict via the Accelerate helper (which
+    # uses StateDictOptions under the hood) and return it so the caller
+    # can load it into a clean, non-FSDP model copy.
     if fsdp:
         state_dict = trainer.accelerator.get_state_dict(trainer.model)
-        model.load_state_dict(state_dict)
-        model.cpu()
+        return state_dict
 
     # After finishing training, set eval mode again
     model.eval()
+    return None
 
 
 # Backward-compatible alias
