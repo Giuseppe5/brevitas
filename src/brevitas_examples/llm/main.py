@@ -43,6 +43,7 @@ from brevitas_examples.common.generative.quantizers import QUANTIZERS_REGISTRY
 from brevitas_examples.common.parse_utils import override_defaults
 from brevitas_examples.common.parse_utils import parse_args
 from brevitas_examples.llm.gguf_export.export import save_quantized_as_gguf
+import brevitas_examples.llm.learned_float_quant
 from brevitas_examples.llm.llm_args import create_args_parser
 from brevitas_examples.llm.llm_args import fx_required
 from brevitas_examples.llm.llm_args import validate
@@ -78,7 +79,7 @@ from brevitas_examples.llm.llm_quant.rotation_optimization import parse_rotation
 from brevitas_examples.llm.llm_quant.rotation_optimization import TRAINER_SETUP_REGISTRY
 from brevitas_examples.llm.llm_quant.run_utils import fix_rewriter
 from brevitas_examples.llm.llm_quant.svd_quant import apply_svd_quant
-import brevitas_examples.llm.learned_float_quant
+
 logging = setup_logger(__name__)
 
 try:
@@ -89,6 +90,60 @@ except:
 
 # We need to patch this before anything else is executed
 patch_dynamo_export()
+
+
+def is_main_process() -> bool:
+    """Return whether this is the main process (rank 0).
+
+    Works both before and after ``torch.distributed`` is initialized:
+    ``accelerate launch`` / ``torchrun`` export the ``RANK``/``LOCAL_RANK``
+    environment variables before the process group exists, while
+    ``dist.get_rank()`` is authoritative once it does.
+    """
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank() == 0
+    return int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0"))) == 0
+
+
+def suppress_non_main_process_output() -> None:
+    """Silence stdout/logging/warnings on non-main ranks.
+
+    Under FSDP fine-tuning the full quantization pipeline in
+    :func:`quantize_llm` runs on every rank -- each rank must build an
+    identical model before FSDP can shard it -- which would otherwise
+    duplicate every print/log ``world_size`` times.  Only the trainer in
+    :func:`~brevitas_examples.llm.llm_quant.rotation_optimization.apply_fine_tuning`
+    needs to run collectively; everything else is redundant on non-main
+    ranks.
+
+    ``stderr`` is intentionally left untouched so that genuine errors and
+    tracebacks from non-main ranks remain visible.
+    """
+    if is_main_process():
+        return
+    # Standard library logging shadowed by the module-level brevitas logger,
+    # so import it under a distinct name.
+    import logging as stdlib_logging
+
+    # Redirect stdout (covers every print() call) to devnull.
+    sys.stdout = open(os.devnull, "w")
+    # Disable all logging records of severity WARNING and below across every
+    # logger (brevitas, transformers, accelerate, ...). ERROR/CRITICAL still
+    # propagate to stderr.
+    stdlib_logging.disable(stdlib_logging.WARNING)
+    # Silence warnings.warn(...) noise (e.g. fx/batch-size warnings).
+    warnings.filterwarnings("ignore")
+    # Quieten the HuggingFace stacks explicitly.
+    try:
+        import transformers
+        transformers.utils.logging.set_verbosity_error()
+    except Exception:
+        pass
+    try:
+        import datasets
+        datasets.utils.logging.set_verbosity_error()
+    except Exception:
+        pass
 
 
 def filter_results(results, tasks):
@@ -245,6 +300,11 @@ def find_equalized_layer(layer):
 
 
 def quantize_llm(args, extra_args=None):
+    # When launched under accelerate/torchrun for FSDP fine-tuning, every
+    # rank runs this full pipeline so each has an identical model to shard.
+    # Suppress duplicate output on non-main ranks; only the trainer needs to
+    # run collectively across GPUs.
+    suppress_non_main_process_output()
     validate(args, extra_args)
     set_seed(args.seed)
     if args.export_prefix is None:

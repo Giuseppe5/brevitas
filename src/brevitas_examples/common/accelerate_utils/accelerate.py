@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
+import os
 from typing import Dict
 from typing import Mapping
 from typing import Optional
@@ -21,6 +22,7 @@ from accelerate.utils import send_to_device
 from accelerate.utils.modeling import named_module_tensors
 from psutil import virtual_memory
 import torch
+import torch.distributed as dist
 
 import brevitas.config as config
 from brevitas.graph.utils import get_module
@@ -370,9 +372,47 @@ def find_all_devices(data):
         return [(data, str(data.device))]
 
 
+def _is_distributed_run() -> bool:
+    """Return whether we are running as one of several distributed processes.
+
+    Covers both the case where the process group is already initialized
+    (e.g. inside the Trainer) and the prep phase that runs *before* it is,
+    where ``accelerate launch`` / ``torchrun`` have already exported
+    ``WORLD_SIZE``.
+    """
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_world_size() > 1
+    return int(os.environ.get("WORLD_SIZE", "1")) > 1
+
+
+def _local_device_index() -> int:
+    """Return the GPU index this process should use.
+
+    When each process sees all GPUs (the usual ``accelerate launch`` /
+    ``torchrun`` setup), this is ``LOCAL_RANK``.  When ``accelerate``
+    restricts ``CUDA_VISIBLE_DEVICES`` to a single device per process,
+    only index ``0`` is valid, so we fall back to it.
+    """
+    idx = int(os.environ.get("LOCAL_RANK", "0"))
+    if torch.cuda.device_count() <= 1:
+        return 0
+    return idx
+
+
 def calc_gpu_device_map(absolute_mem_margin: float = 2.0 * 1e9,
                         relative_mem_margin: float = 0.3) -> Dict[int, float]:
     torch.cuda.empty_cache()
+    # In a multi-process distributed run (e.g. FSDP fine-tuning launched with
+    # accelerate/torchrun) every process runs the preparation pipeline. Each
+    # process must therefore confine offloading to its own GPU, otherwise all
+    # processes would try to dispatch a full model copy across every GPU,
+    # causing memory contention, racy device maps and OOMs. Single-process runs
+    # keep the classic behaviour of spreading one model across all GPUs.
+    if _is_distributed_run():
+        local_idx = _local_device_index()
+        local_mem = (torch.cuda.mem_get_info(local_idx)[0] -
+                     absolute_mem_margin) * (1.0 - relative_mem_margin)
+        return {local_idx: local_mem}
     gpu_device_map = {
         i: (torch.cuda.mem_get_info(i)[0] - absolute_mem_margin) * (1.0 - relative_mem_margin)
         for i in range(torch.cuda.device_count())}
