@@ -34,6 +34,7 @@ from brevitas.optim.cailey_sgd import CaileySGD
 from brevitas.utils.parametrization_utils import extract_trainable_rotation_matrices
 from brevitas.utils.python_utils import Registry
 from brevitas_examples.common.accelerate_utils.accelerate import remove_hooks
+from brevitas_examples.common.accelerate_utils.accelerate import offload_model
 
 
 def _is_fsdp_enabled(training_args: transformers.TrainingArguments) -> bool:
@@ -414,32 +415,35 @@ class GeneralizedTrainer(Trainer):
 
     def _wrap_model(self, model, training=True, dataloader=None):
         wrapped = super()._wrap_model(model, training, dataloader)
-        if self.teacher_model is not None and self.is_fsdp_enabled:
-            # Shard the teacher model bottom-up (per decoder layer,
-            # then root), mirroring how the student is sharded by
-            # FSDP2's fully_shard.  The FSDP1 set_auto_wrap_policy
-            # helper has no effect on fully_shard, so we resolve the
-            # transformer layer class ourselves and iterate manually.
-            fsdp_plugin = self.accelerator.state.fsdp_plugin
-            cls_names = getattr(fsdp_plugin, "transformer_cls_names_to_wrap", None)
-            if not cls_names:
-                no_split = getattr(self.teacher_model, "_no_split_modules", None)
-                cls_names = list(no_split) if no_split else []
+        if self.teacher_model is not None:
+            if self.is_fsdp_enabled:
+                # Shard the teacher model bottom-up (per decoder layer,
+                # then root), mirroring how the student is sharded by
+                # FSDP2's fully_shard.  The FSDP1 set_auto_wrap_policy
+                # helper has no effect on fully_shard, so we resolve the
+                # transformer layer class ourselves and iterate manually.
+                fsdp_plugin = self.accelerator.state.fsdp_plugin
+                cls_names = getattr(fsdp_plugin, "transformer_cls_names_to_wrap", None)
+                if not cls_names:
+                    no_split = getattr(self.teacher_model, "_no_split_modules", None)
+                    cls_names = list(no_split) if no_split else []
 
-            from accelerate.utils.dataclasses import get_module_class_from_name
-            layer_classes = set()
-            for name in cls_names:
-                cls = get_module_class_from_name(self.teacher_model, name)
-                if cls is not None:
-                    layer_classes.add(cls)
-            layer_classes = tuple(layer_classes)
+                from accelerate.utils.dataclasses import get_module_class_from_name
+                layer_classes = set()
+                for name in cls_names:
+                    cls = get_module_class_from_name(self.teacher_model, name)
+                    if cls is not None:
+                        layer_classes.add(cls)
+                layer_classes = tuple(layer_classes)
 
-            # Apply fully_shard bottom-up: per decoder layer first
-            for module in self.teacher_model.modules():
-                if layer_classes and isinstance(module, layer_classes):
-                    fully_shard(module)
-            # Then shard the root
-            fully_shard(self.teacher_model)
+                # Apply fully_shard bottom-up: per decoder layer first
+                for module in self.teacher_model.modules():
+                    if layer_classes and isinstance(module, layer_classes):
+                        fully_shard(module)
+                # Then shard the root
+                fully_shard(self.teacher_model)
+            else:
+                self.teacher_model = offload_model(self.teacher_model)
         return wrapped
 
 

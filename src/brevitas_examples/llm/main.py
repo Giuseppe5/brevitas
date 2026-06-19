@@ -78,7 +78,7 @@ from brevitas_examples.llm.llm_quant.rotation_optimization import parse_rotation
 from brevitas_examples.llm.llm_quant.rotation_optimization import TRAINER_SETUP_REGISTRY
 from brevitas_examples.llm.llm_quant.run_utils import fix_rewriter
 from brevitas_examples.llm.llm_quant.svd_quant import apply_svd_quant
-
+import brevitas_examples.llm.learned_float_quant
 logging = setup_logger(__name__)
 
 try:
