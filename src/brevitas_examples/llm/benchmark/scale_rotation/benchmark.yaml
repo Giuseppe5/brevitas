@@ -1,0 +1,153 @@
+# Benchmark config for joint scale-factor + rotation optimization (MXFP4).
+#
+# This YAML is used with llm_benchmark.py, which runs the LLM quantization
+# entrypoint (main.py) for every combination in the grid below.
+#
+# Each key maps to a list of values.  The benchmark framework takes the
+# Cartesian product of all lists to generate the experiment combinations.
+# Keys recognized by llm_args.py go into the main Namespace; all other keys
+# (e.g. HuggingFace TrainingArguments and the ScaleRotationTrainingArguments
+# fields such as scale_learning_rate / rotation_learning_rate) are forwarded
+# as extra_args to the custom trainer.
+#
+# Recipe
+# ------
+# * MXFP4 for both weights and activations (float_ocp_e2m1, per-group 32,
+#   po2 scales; dynamic per-group activations).
+# * Fused rotations are merged when possible, standalone (orphan-sink)
+#   rotations are performed blockwise with a block size of 32.
+# * The "scale_rotation" custom trainer jointly optimizes the quantizers'
+#   scale factors (AdamW) and the rotation matrices (CaileySGD).
+#
+# Grid: 4 models x 3 scale learning rates x 2 max_steps = 24 experiments.
+#
+# Usage:
+#
+#   python -m brevitas_examples.llm.benchmark.llm_benchmark \
+#       --config src/brevitas_examples/llm/benchmark/scale_rotation/benchmark.yaml \
+#       --results-folder ./scale_rotation_results \
+#       --gpus 0
+
+# ─── Models (normal + instruct, 1B and 3B) ───────────────────────────
+model:
+- meta-llama/Llama-3.2-1B
+- meta-llama/Llama-3.2-1B-Instruct
+- meta-llama/Llama-3.2-3B
+- meta-llama/Llama-3.2-3B-Instruct
+
+# ─── Weight quantization (MXFP4) ─────────────────────────────────────
+weight_quant_format:
+- float_ocp_e2m1
+weight_scale_precision:
+- po2_scale
+weight_quant_granularity:
+- per_group
+weight_group_size:
+- 32
+weight_quant_type:
+- sym
+weight_param_method:
+- stats
+
+# ─── Activation quantization (MXFP4) ─────────────────────────────────
+input_bit_width:
+- 4
+input_quant_format:
+- float_ocp_e2m1
+input_scale_precision:
+- po2_scale
+input_scale_type:
+- dynamic
+input_quant_granularity:
+- per_group
+input_group_size:
+- 32
+input_quant_type:
+- sym
+input_param_method:
+- stats
+act_calibration:
+- false
+
+# ─── Rotation (fused merged when possible, blockwise standalone) ─────
+rotation:
+- fused_no_fx
+rotation_mode:
+- had
+replace_rmsnorm:
+- true
+# Add standalone Hadamard rotations for the layers that cannot be fused.
+rotation_orphan_sink:
+- true
+# Perform the standalone rotations blockwise with a block size of 32.
+rotation_block_size:
+- 32
+# Keep fused rotations merged/full when possible (do not block-rotate them).
+disable_block_rotation_for_fused:
+- true
+
+# ─── Calibration ─────────────────────────────────────────────────────
+dataset:
+- wikitext2
+nsamples:
+- 128
+nsamples_rot_calibration:
+- 1600
+seqlen:
+- 2048
+seed:
+- 0
+
+# ─── Fine-tuning (scale + rotation custom trainer) ───────────────────
+fine_tune:
+- true
+# Registered by name in main.py, so no plugin path is required.
+custom_trainer:
+- scale_rotation
+
+# ─── Evaluation ──────────────────────────────────────────────────────
+eval:
+- true
+dtype:
+- auto
+
+# ─── Trainer args (forwarded as extra_args) ──────────────────────────
+# These keys are NOT recognized by llm_args.py, so the benchmark framework
+# serializes them as CLI args and passes them to main.py, where they are
+# parsed into ScaleRotationTrainingArguments.
+#
+# Swept: learning rate for the scale factors (AdamW).
+scale_learning_rate:
+- 0.1
+- 0.5
+- 0.01
+# Learning rate for the rotation matrices (CaileySGD).
+rotation_learning_rate:
+- 1.5
+# Run the optimizer computations in float32.
+optimizer_dtype:
+- float32
+# Swept: number of training steps.
+max_steps:
+- 100
+- 200
+per_device_train_batch_size:
+- 8
+gradient_accumulation_steps:
+- 1
+logging_steps:
+- 10
+
+few_shot_eval:
+- lighteval
+few_shot_zeroshot:
+- true
+few_shot_limit:
+- null
+few_shot_override_batch_size:
+- 32
+few_shot_tasks:
+- - arc:challenge|0
+  - winogrande|0
+  - arc:easy|0
+  - hellaswag_lm_eval|0

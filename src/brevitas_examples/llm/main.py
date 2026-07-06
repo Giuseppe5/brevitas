@@ -40,6 +40,11 @@ from brevitas_examples.common.generative.quantize import generate_quantizers
 from brevitas_examples.common.generative.quantizers import QUANTIZERS_REGISTRY
 from brevitas_examples.common.parse_utils import override_defaults
 from brevitas_examples.common.parse_utils import parse_args
+# Side-effecting imports: registering the built-in custom trainers into
+# TRAINER_REGISTRY so they can be selected by name (e.g. --custom-trainer scale
+# or --custom-trainer scale_rotation) without providing a plugin file path.
+import brevitas_examples.llm.custom_trainers.scale_rotation_trainer  # noqa: F401
+import brevitas_examples.llm.custom_trainers.scale_trainer  # noqa: F401
 from brevitas_examples.llm.gguf_export.export import save_quantized_as_gguf
 from brevitas_examples.llm.llm_args import create_args_parser
 from brevitas_examples.llm.llm_args import fx_required
