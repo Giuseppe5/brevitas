@@ -1,0 +1,42 @@
+Model loading...
+Model loaded.
+Data loaded.
+Float model eval...
+Float perplexity (wikitext2): 8.943
+Applying model quantization...
+Model quantization applied.
+{'loss': 4.3695, 'grad_norm': 11.125, 'learning_rate': 1.5, 'epoch': 0.05}
+{'loss': 4.1406, 'grad_norm': 11.5, 'learning_rate': 1.5, 'epoch': 0.1}
+{'loss': 4.1973, 'grad_norm': 10.6875, 'learning_rate': 1.5, 'epoch': 0.15}
+{'loss': 4.3122, 'grad_norm': 10.375, 'learning_rate': 1.5, 'epoch': 0.2}
+{'loss': 4.1458, 'grad_norm': 7.46875, 'learning_rate': 1.5, 'epoch': 0.25}
+{'loss': 4.1356, 'grad_norm': 10.0, 'learning_rate': 1.5, 'epoch': 0.3}
+{'loss': 4.0984, 'grad_norm': 8.375, 'learning_rate': 1.5, 'epoch': 0.35}
+{'loss': 4.1026, 'grad_norm': 9.0, 'learning_rate': 1.5, 'epoch': 0.4}
+{'loss': 4.0744, 'grad_norm': 8.375, 'learning_rate': 1.5, 'epoch': 0.45}
+{'loss': 4.0936, 'grad_norm': 9.0, 'learning_rate': 1.5, 'epoch': 0.5}
+{'loss': 3.9789, 'grad_norm': 8.0625, 'learning_rate': 1.5, 'epoch': 0.55}
+{'loss': 4.1406, 'grad_norm': 7.875, 'learning_rate': 1.5, 'epoch': 0.6}
+{'loss': 3.9974, 'grad_norm': 10.375, 'learning_rate': 1.5, 'epoch': 0.65}
+{'loss': 4.0747, 'grad_norm': 9.0625, 'learning_rate': 1.5, 'epoch': 0.7}
+{'loss': 4.0128, 'grad_norm': 4.25, 'learning_rate': 1.5, 'epoch': 0.75}
+{'loss': 4.0686, 'grad_norm': 10.8125, 'learning_rate': 1.5, 'epoch': 0.8}
+{'loss': 4.0923, 'grad_norm': 6.34375, 'learning_rate': 1.5, 'epoch': 0.85}
+{'loss': 4.2135, 'grad_norm': 11.4375, 'learning_rate': 1.5, 'epoch': 0.9}
+{'loss': 4.1502, 'grad_norm': 8.6875, 'learning_rate': 1.5, 'epoch': 0.95}
+{'loss': 4.0563, 'grad_norm': 8.3125, 'learning_rate': 1.5, 'epoch': 1.0}
+{'train_runtime': 626.518, 'train_samples_per_second': 2.554, 'train_steps_per_second': 0.319, 'train_loss': 4.12276933670044, 'epoch': 1.0}
+Model eval...
+Quantized perplexity (wikitext2): 56.183
+{'all_acc': np.float64(0.3058976550226988),
+ 'all_acc_stderr': 0.009778147240599968,
+ 'arc:_average:0_acc': np.float64(0.23798924972133162),
+ 'arc:_average:0_acc_stderr': 0.010334795179783174,
+ 'arc:challenge:0_acc': np.float64(0.18515358361774745),
+ 'arc:challenge:0_acc_stderr': 0.011350774438389688,
+ 'arc:easy:0_acc': np.float64(0.2908249158249158),
+ 'arc:easy:0_acc_stderr': 0.009318815921176659,
+ 'hellaswag_lm_eval:0_acc': np.float64(0.26379207329217286),
+ 'hellaswag_lm_eval:0_acc_stderr': 0.004397872471854922,
+ 'winogrande:0_acc': np.float64(0.48382004735595896),
+ 'winogrande:0_acc_stderr': 0.014045126130978603}

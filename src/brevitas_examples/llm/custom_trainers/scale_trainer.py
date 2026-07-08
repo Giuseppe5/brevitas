@@ -19,7 +19,7 @@ Usage
         --per_device_train_batch_size 4 \\
         --gradient_accumulation_steps 4 \\
         --bf16 True \\
-        --learning_rate 1e-3
+        --scale_learning_rate 1e-3
 
 Design
 ------
@@ -37,6 +37,10 @@ Design
 
 from dataclasses import dataclass
 from typing import List
+from dataclasses import field
+
+from typing import Optional
+
 
 import torch
 import transformers
@@ -77,6 +81,12 @@ class ScaleTrainingArguments(TrainingArguments):
     ``optimizer_scheduler_args`` mechanism: a single optimizer whose
     single parameter group holds the quantizers' scale factors.
     """
+    learning_rate: Optional[float] = field(
+        default=None,
+        metadata={
+            "help":
+                "Learning rate for AdamW on the scale factors. "
+                "Defaults to --learning_rate when unset."})
 
     def __post_init__(self) -> None:
         super().__post_init__()

@@ -1,0 +1,32 @@
+Model loading...
+Model loaded.
+Data loaded.
+Float model eval...
+Float perplexity (wikitext2): 12.017
+Applying model quantization...
+Model quantization applied.
+{'loss': 2.8873, 'grad_norm': 3.53125, 'learning_rate': 1.5, 'epoch': 0.05}
+{'loss': 2.8224, 'grad_norm': 3.3125, 'learning_rate': 1.5, 'epoch': 0.1}
+{'loss': 2.7767, 'grad_norm': 3.359375, 'learning_rate': 1.5, 'epoch': 0.15}
+{'loss': 2.8204, 'grad_norm': 3.03125, 'learning_rate': 1.5, 'epoch': 0.2}
+{'loss': 2.7305, 'grad_norm': 3.5, 'learning_rate': 1.5, 'epoch': 0.25}
+{'loss': 2.7449, 'grad_norm': 3.203125, 'learning_rate': 1.5, 'epoch': 0.3}
+{'loss': 2.7473, 'grad_norm': 3.203125, 'learning_rate': 1.5, 'epoch': 0.35}
+{'loss': 2.7095, 'grad_norm': 3.1875, 'learning_rate': 1.5, 'epoch': 0.4}
+{'loss': 2.7273, 'grad_norm': 3.4375, 'learning_rate': 1.5, 'epoch': 0.45}
+{'loss': 2.7507, 'grad_norm': 3.609375, 'learning_rate': 1.5, 'epoch': 0.5}
+{'train_runtime': 346.1975, 'train_samples_per_second': 2.311, 'train_steps_per_second': 0.289, 'train_loss': 2.7717221069335936, 'epoch': 0.5}
+Model eval...
+Quantized perplexity (wikitext2): 13.670
+{'all_acc': np.float64(0.47776392165789233),
+ 'all_acc_stderr': 0.010507701855294184,
+ 'arc:_average:0_acc': np.float64(0.46261893680835664),
+ 'arc:_average:0_acc_stderr': 0.011594234359915486,
+ 'arc:challenge:0_acc': np.float64(0.29266211604095566),
+ 'arc:challenge:0_acc_stderr': 0.013295916103619413,
+ 'arc:easy:0_acc': np.float64(0.6325757575757576),
+ 'arc:easy:0_acc_stderr': 0.00989255261621156,
+ 'hellaswag_lm_eval:0_acc': np.float64(0.4175463055168293),
+ 'hellaswag_lm_eval:0_acc_stderr': 0.004921466591335054,
+ 'winogrande:0_acc': np.float64(0.5682715074980268),
+ 'winogrande:0_acc_stderr': 0.013920872110010711}

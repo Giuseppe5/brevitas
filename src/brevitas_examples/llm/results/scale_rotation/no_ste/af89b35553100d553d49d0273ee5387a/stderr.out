@@ -1,0 +1,146 @@
+/workspace/git/brevitas/src/brevitas/graph/equalize.py:68: UserWarning: fast_hadamard_transform package not found, using standard pytorch kernels
+  warnings.warn("fast_hadamard_transform package not found, using standard pytorch kernels")
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 195.23it/s]
+Token indices sequence length is longer than the specified maximum sequence length for this model (2436214 > 131072). Running this sequence through the model will result in indexing errors
+  0%|          | 0/128 [00:00<?, ?it/s]100%|██████████| 128/128 [00:00<00:00, 22444.44it/s]
+  0%|          | 0/123 [00:00<?, ?it/s]100%|██████████| 123/123 [00:00<00:00, 94747.36it/s]
+  0%|          | 0/1600 [00:00<?, ?it/s]100%|██████████| 1600/1600 [00:00<00:00, 47375.53it/s]
+Computing perplexity...:   0%|          | 0/123 [00:00<?, ?it/s]Computing perplexity...:   1%|          | 1/123 [00:04<09:50,  4.84s/it]Computing perplexity...:   4%|▍         | 5/123 [00:04<01:27,  1.35it/s]Computing perplexity...:   7%|▋         | 9/123 [00:05<00:39,  2.85it/s]Computing perplexity...:  11%|█         | 13/123 [00:05<00:22,  4.79it/s]Computing perplexity...:  14%|█▍        | 17/123 [00:05<00:14,  7.18it/s]Computing perplexity...:  17%|█▋        | 21/123 [00:05<00:10, 10.02it/s]Computing perplexity...:  20%|██        | 25/123 [00:05<00:07, 13.22it/s]Computing perplexity...:  24%|██▎       | 29/123 [00:05<00:05, 16.64it/s]Computing perplexity...:  27%|██▋       | 33/123 [00:05<00:04, 20.04it/s]Computing perplexity...:  30%|███       | 37/123 [00:05<00:03, 23.17it/s]Computing perplexity...:  33%|███▎      | 41/123 [00:05<00:03, 25.88it/s]Computing perplexity...:  37%|███▋      | 45/123 [00:06<00:02, 28.31it/s]Computing perplexity...:  40%|███▉      | 49/123 [00:06<00:02, 30.14it/s]Computing perplexity...:  43%|████▎     | 53/123 [00:06<00:02, 31.62it/s]Computing perplexity...:  46%|████▋     | 57/123 [00:06<00:02, 32.83it/s]Computing perplexity...:  50%|████▉     | 61/123 [00:06<00:01, 33.65it/s]Computing perplexity...:  53%|█████▎    | 65/123 [00:06<00:01, 34.13it/s]Computing perplexity...:  56%|█████▌    | 69/123 [00:06<00:01, 34.57it/s]Computing perplexity...:  59%|█████▉    | 73/123 [00:06<00:01, 34.99it/s]Computing perplexity...:  63%|██████▎   | 77/123 [00:06<00:01, 35.15it/s]Computing perplexity...:  66%|██████▌   | 81/123 [00:07<00:01, 35.18it/s]Computing perplexity...:  69%|██████▉   | 85/123 [00:07<00:01, 35.33it/s]Computing perplexity...:  72%|███████▏  | 89/123 [00:07<00:00, 35.49it/s]Computing perplexity...:  76%|███████▌  | 93/123 [00:07<00:00, 35.42it/s]Computing perplexity...:  79%|███████▉  | 97/123 [00:07<00:00, 35.27it/s]Computing perplexity...:  82%|████████▏ | 101/123 [00:07<00:00, 35.50it/s]Computing perplexity...:  85%|████████▌ | 105/123 [00:07<00:00, 35.52it/s]Computing perplexity...:  89%|████████▊ | 109/123 [00:07<00:00, 35.47it/s]Computing perplexity...:  92%|█████████▏| 113/123 [00:07<00:00, 35.55it/s]Computing perplexity...:  95%|█████████▌| 117/123 [00:08<00:00, 35.73it/s]Computing perplexity...:  98%|█████████▊| 121/123 [00:08<00:00, 35.66it/s]Computing perplexity...: 100%|██████████| 123/123 [00:08<00:00, 14.90it/s]
+/workspace/git/brevitas/src/brevitas/graph/equalize.py:1990: UserWarning: Using parametrized results might break type-checking, which could lead to unexpected behaviour.
+  warnings.warn(
+WARNING:accelerate.utils.modeling:The model weights are not tied. Please use the `tie_weights` method before using the `infer_auto_device` function.
+/opt/venv/lib/python3.12/site-packages/torch/_tensor.py:1630: UserWarning: Named tensors and all their associated APIs are an experimental feature and subject to change. Please do not use them for anything important until they are released as stable. (Triggered internally at /pytorch/c10/core/TensorImpl.h:1971.)
+  return super().rename(names)
+/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/rotation_optimization.py:49: FutureWarning: `tokenizer` is deprecated and will be removed in version 5.0.0 for `ScaleRotationTrainer.__init__`. Use `processing_class` instead.
+  super().__init__(args=args, **kwargs)
+The model is already on multiple devices. Skipping the move to device specified in `args`.
+The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'eos_token_id': 128009}.
+  0%|          | 0/200 [00:00<?, ?it/s]Traceback (most recent call last):
+  File "/workspace/git/brevitas/src/brevitas_examples/common/benchmark/utils.py", line 179, in run_args_bucket_process
+    results, _ = main_entrypoint(args, extra_args, job_folder)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/benchmark/llm_benchmark.py", line 54, in entrypoint_main
+    return quantize_llm(args=args, extra_args=extra_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/main.py", line 614, in quantize_llm
+    apply_fine_tuning(
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/rotation_optimization.py", line 311, in apply_fine_tuning
+    trainer.train()
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 2325, in train
+    return inner_training_loop(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 2674, in _inner_training_loop
+    tr_loss_step = self.training_step(model, inputs, num_items_in_batch)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 4020, in training_step
+    loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/rotation_optimization.py", line 95, in compute_loss
+    loss = super().compute_loss(model, inputs, distillation_return_outputs, num_items_in_batch)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 4110, in compute_loss
+    outputs = model(**inputs)
+              ^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/utils/generic.py", line 918, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py", line 459, in forward
+    outputs: BaseModelOutputWithPast = self.model(
+                                       ^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/utils/generic.py", line 1072, in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py", line 395, in forward
+    hidden_states = decoder_layer(
+                    ^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/modeling_layers.py", line 94, in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/utils/deprecation.py", line 172, in wrapped_func
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py", line 294, in forward
+    hidden_states, _ = self.self_attn(
+                       ^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/utils/deprecation.py", line 172, in wrapped_func
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py", line 264, in forward
+    attn_output = self.o_proj(attn_output)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/nn/equalized_layer.py", line 118, in forward
+    o = self.layer(inp, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/nn/quant_linear.py", line 68, in forward
+    return self.forward_impl(input)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/nn/quant_layer.py", line 146, in forward_impl
+    quant_weight = self.quant_weight(quant_input)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/nn/mixin/parameter.py", line 49, in quant_weight
+    weights_to_quantize = self.weight
+                          ^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/utils/parametrize.py", line 407, in get_parametrized
+    return parametrization()
+           ^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/utils/parametrize.py", line 300, in forward
+    x = self[0](self.original)
+        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/utils/parametrization_utils.py", line 57, in forward
+    tensor = self.rot_func(tensor, self.rot_mat, self.K)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/graph/equalize.py", line 1541, in _apply_ort_device
+    return torch.matmul(tensor, ort)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: HIP out of memory. Tried to allocate 18.00 MiB. GPU 0 has a total capacity of 251.98 GiB of which 0 bytes is free. Of the allocated memory 37.80 GiB is allocated by PyTorch, and 28.69 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+  0%|          | 0/200 [00:14<?, ?it/s]

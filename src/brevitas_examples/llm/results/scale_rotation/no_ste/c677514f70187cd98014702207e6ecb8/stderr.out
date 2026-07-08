@@ -1,0 +1,284 @@
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 218.88it/s]
+--- Logging error ---
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/logging/__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+ValueError: I/O operation on closed file.
+Call stack:
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+  File "/usr/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/usr/lib/python3.12/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/workspace/git/brevitas/src/brevitas_examples/common/benchmark/utils.py", line 179, in run_args_bucket_process
+    results, _ = main_entrypoint(args, extra_args, job_folder)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/benchmark/llm_benchmark.py", line 54, in entrypoint_main
+    return quantize_llm(args=args, extra_args=extra_args)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/main.py", line 291, in quantize_llm
+    calibration_dataset = get_dataset_for_model(
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/data_utils.py", line 151, in get_dataset_for_model
+    dataset = get_wikitext2(
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/data.py", line 175, in get_wikitext2
+    input_ids = tokenizer(
+  File "/opt/venv/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 3078, in __call__
+    encodings = self._call_one(text=text, text_pair=text_pair, **all_kwargs)
+  File "/opt/venv/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 3188, in _call_one
+    return self.encode_plus(
+  File "/opt/venv/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 3263, in encode_plus
+    return self._encode_plus(
+  File "/opt/venv/lib/python3.12/site-packages/transformers/tokenization_utils_fast.py", line 627, in _encode_plus
+    batched_output = self._batch_encode_plus(
+  File "/opt/venv/lib/python3.12/site-packages/transformers/tokenization_utils_fast.py", line 600, in _batch_encode_plus
+    self._eventual_warn_about_too_long_sequence(input_ids, max_length, verbose)
+  File "/opt/venv/lib/python3.12/site-packages/transformers/tokenization_utils_base.py", line 4149, in _eventual_warn_about_too_long_sequence
+    logger.warning(
+Message: 'Token indices sequence length is longer than the specified maximum sequence length for this model (2436214 > 131072). Running this sequence through the model will result in indexing errors'
+Arguments: ()
+  0%|          | 0/128 [00:00<?, ?it/s]100%|██████████| 128/128 [00:00<00:00, 16218.20it/s]
+  0%|          | 0/123 [00:00<?, ?it/s]100%|██████████| 123/123 [00:00<00:00, 47901.52it/s]
+  0%|          | 0/1600 [00:00<?, ?it/s]100%|██████████| 1600/1600 [00:00<00:00, 27695.69it/s]
+Computing perplexity...:   0%|          | 0/123 [00:00<?, ?it/s]Computing perplexity...:   3%|▎         | 4/123 [00:00<00:03, 37.89it/s]Computing perplexity...:   7%|▋         | 8/123 [00:00<00:03, 35.80it/s]Computing perplexity...:  10%|▉         | 12/123 [00:00<00:03, 30.74it/s]Computing perplexity...:  13%|█▎        | 16/123 [00:00<00:03, 31.83it/s]Computing perplexity...:  16%|█▋        | 20/123 [00:00<00:03, 32.72it/s]Computing perplexity...:  20%|█▉        | 24/123 [00:00<00:02, 33.36it/s]Computing perplexity...:  23%|██▎       | 28/123 [00:00<00:03, 29.87it/s]Computing perplexity...:  26%|██▌       | 32/123 [00:01<00:03, 28.06it/s]Computing perplexity...:  29%|██▉       | 36/123 [00:01<00:02, 29.58it/s]Computing perplexity...:  33%|███▎      | 40/123 [00:01<00:02, 31.01it/s]Computing perplexity...:  36%|███▌      | 44/123 [00:01<00:02, 31.96it/s]Computing perplexity...:  39%|███▉      | 48/123 [00:01<00:02, 31.89it/s]Computing perplexity...:  42%|████▏     | 52/123 [00:01<00:02, 31.89it/s]Computing perplexity...:  46%|████▌     | 56/123 [00:01<00:02, 32.70it/s]Computing perplexity...:  49%|████▉     | 60/123 [00:01<00:01, 33.13it/s]Computing perplexity...:  52%|█████▏    | 64/123 [00:01<00:01, 33.47it/s]Computing perplexity...:  55%|█████▌    | 68/123 [00:02<00:01, 32.16it/s]Computing perplexity...:  59%|█████▊    | 72/123 [00:02<00:01, 32.85it/s]Computing perplexity...:  62%|██████▏   | 76/123 [00:02<00:01, 30.75it/s]Computing perplexity...:  65%|██████▌   | 80/123 [00:02<00:01, 31.73it/s]Computing perplexity...:  68%|██████▊   | 84/123 [00:02<00:01, 31.82it/s]Computing perplexity...:  72%|███████▏  | 88/123 [00:02<00:01, 32.43it/s]Computing perplexity...:  75%|███████▍  | 92/123 [00:02<00:01, 29.77it/s]Computing perplexity...:  78%|███████▊  | 96/123 [00:03<00:00, 31.10it/s]Computing perplexity...:  81%|████████▏ | 100/123 [00:03<00:00, 31.51it/s]Computing perplexity...:  85%|████████▍ | 104/123 [00:03<00:00, 29.70it/s]Computing perplexity...:  88%|████████▊ | 108/123 [00:03<00:00, 30.97it/s]Computing perplexity...:  91%|█████████ | 112/123 [00:03<00:00, 31.99it/s]Computing perplexity...:  94%|█████████▍| 116/123 [00:03<00:00, 28.51it/s]Computing perplexity...:  98%|█████████▊| 120/123 [00:03<00:00, 29.25it/s]Computing perplexity...: 100%|██████████| 123/123 [00:03<00:00, 29.09it/s]Computing perplexity...: 100%|██████████| 123/123 [00:03<00:00, 31.13it/s]
+/workspace/git/brevitas/src/brevitas/graph/equalize.py:1990: UserWarning: Using parametrized results might break type-checking, which could lead to unexpected behaviour.
+  warnings.warn(
+--- Logging error ---
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/logging/__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+ValueError: I/O operation on closed file.
+Call stack:
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+  File "/usr/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/usr/lib/python3.12/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/workspace/git/brevitas/src/brevitas_examples/common/benchmark/utils.py", line 179, in run_args_bucket_process
+    results, _ = main_entrypoint(args, extra_args, job_folder)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/benchmark/llm_benchmark.py", line 54, in entrypoint_main
+    return quantize_llm(args=args, extra_args=extra_args)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/main.py", line 411, in quantize_llm
+    fused_rotation_no_fx(model, calibration_loader, args)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/main.py", line 176, in fused_rotation_no_fx
+    model = offload_model(model)
+  File "/workspace/git/brevitas/src/brevitas_examples/common/accelerate_utils/accelerate.py", line 414, in offload_model
+    device_map = infer_auto_device_map(
+  File "/opt/venv/lib/python3.12/site-packages/accelerate/utils/modeling.py", line 1358, in infer_auto_device_map
+    ) = _init_infer_auto_device_map(model, max_memory, no_split_module_classes, dtype, special_dtypes)
+  File "/opt/venv/lib/python3.12/site-packages/accelerate/utils/modeling.py", line 1128, in _init_infer_auto_device_map
+    logger.warning(
+Message: 'The model weights are not tied. Please use the `tie_weights` method before using the `infer_auto_device` function.'
+Arguments: ()
+/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/rotation_optimization.py:49: FutureWarning: `tokenizer` is deprecated and will be removed in version 5.0.0 for `ScaleRotationTrainer.__init__`. Use `processing_class` instead.
+  super().__init__(args=args, **kwargs)
+--- Logging error ---
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/logging/__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+ValueError: I/O operation on closed file.
+Call stack:
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+  File "/usr/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/usr/lib/python3.12/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/workspace/git/brevitas/src/brevitas_examples/common/benchmark/utils.py", line 179, in run_args_bucket_process
+    results, _ = main_entrypoint(args, extra_args, job_folder)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/benchmark/llm_benchmark.py", line 54, in entrypoint_main
+    return quantize_llm(args=args, extra_args=extra_args)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/main.py", line 614, in quantize_llm
+    apply_fine_tuning(
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/rotation_optimization.py", line 310, in apply_fine_tuning
+    trainer = trainer_cls(**trainer_kwargs)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/rotation_optimization.py", line 49, in __init__
+    super().__init__(args=args, **kwargs)
+  File "/opt/venv/lib/python3.12/site-packages/transformers/utils/deprecation.py", line 172, in wrapped_func
+    return func(*args, **kwargs)
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 612, in __init__
+    self._move_model_to_device(model, args.device)
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 906, in _move_model_to_device
+    logger.warning(
+Message: 'The model is already on multiple devices. Skipping the move to device specified in `args`.'
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/logging/__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+ValueError: I/O operation on closed file.
+Call stack:
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+  File "/usr/lib/python3.12/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/usr/lib/python3.12/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/workspace/git/brevitas/src/brevitas_examples/common/benchmark/utils.py", line 179, in run_args_bucket_process
+    results, _ = main_entrypoint(args, extra_args, job_folder)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/benchmark/llm_benchmark.py", line 54, in entrypoint_main
+    return quantize_llm(args=args, extra_args=extra_args)
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/main.py", line 614, in quantize_llm
+    apply_fine_tuning(
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/rotation_optimization.py", line 311, in apply_fine_tuning
+    trainer.train()
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 2250, in train
+    self._align_special_tokens()
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 982, in _align_special_tokens
+    logger.warning(
+Message: "The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'eos_token_id': 128009}."
+Arguments: ()
+  0%|          | 0/100 [00:00<?, ?it/s]Traceback (most recent call last):
+  File "/workspace/git/brevitas/src/brevitas_examples/common/benchmark/utils.py", line 179, in run_args_bucket_process
+    results, _ = main_entrypoint(args, extra_args, job_folder)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/benchmark/llm_benchmark.py", line 54, in entrypoint_main
+    return quantize_llm(args=args, extra_args=extra_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/main.py", line 614, in quantize_llm
+    apply_fine_tuning(
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/rotation_optimization.py", line 311, in apply_fine_tuning
+    trainer.train()
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 2325, in train
+    return inner_training_loop(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 2674, in _inner_training_loop
+    tr_loss_step = self.training_step(model, inputs, num_items_in_batch)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 4020, in training_step
+    loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas_examples/llm/llm_quant/rotation_optimization.py", line 95, in compute_loss
+    loss = super().compute_loss(model, inputs, distillation_return_outputs, num_items_in_batch)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/trainer.py", line 4110, in compute_loss
+    outputs = model(**inputs)
+              ^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/utils/generic.py", line 918, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py", line 459, in forward
+    outputs: BaseModelOutputWithPast = self.model(
+                                       ^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/utils/generic.py", line 1072, in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py", line 395, in forward
+    hidden_states = decoder_layer(
+                    ^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/modeling_layers.py", line 94, in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/utils/deprecation.py", line 172, in wrapped_func
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py", line 309, in forward
+    hidden_states = self.mlp(hidden_states)
+                    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/transformers/models/llama/modeling_llama.py", line 155, in forward
+    down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+                                                                ^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/nn/quant_linear.py", line 68, in forward
+    return self.forward_impl(input)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/nn/quant_layer.py", line 146, in forward_impl
+    quant_weight = self.quant_weight(quant_input)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/nn/mixin/parameter.py", line 75, in quant_weight
+    out = self.weight_quant(weights_to_quantize[weight_slice_tuple])
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/proxy/parameter_quant.py", line 166, in forward
+    out = self.tensor_quant(x)
+          ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 414, in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 832, in compile_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/core/quant/float.py", line 95, in forward
+    y, scale = self.quantize(x, scale)
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/core/quant/float.py", line 68, in quantize
+    x = self.input_view_impl(x)
+        ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/core/function_wrapper/shape.py", line 174, in forward
+    y = padding_to_multiple(x, self.group_dim, self.group_size)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/workspace/git/brevitas/src/brevitas/utils/torch_utils.py", line 125, in padding_to_multiple
+    x = torch.nn.functional.pad(x, padding, mode='constant', value=0.)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/torch/nn/functional.py", line 5294, in pad
+    return torch._C._nn.pad(input, pad, mode, value)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: HIP out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 251.98 GiB of which 0 bytes is free. Of the allocated memory 37.38 GiB is allocated by PyTorch, and 47.19 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+  0%|          | 0/100 [00:00<?, ?it/s]
