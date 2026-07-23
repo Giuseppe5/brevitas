@@ -114,41 +114,131 @@ class TemperatureAnnealingCallback(TrainerCallback):
 
 
 # ---------------------------------------------------------------------------
+# vLLM fused-projection groups
+# ---------------------------------------------------------------------------
+# vLLM fuses several HuggingFace ``nn.Linear`` layers into a single packed GEMM
+# for throughput. For a fused kernel to be valid, every projection packed into
+# the same GEMM must share an identical weight/activation numerical format, i.e.
+# the same learned float bit-width. The suffixes below identify, per Llama-style
+# decoder layer, the members of each fused group:
+#
+#   * ``qkv_proj``      <- q_proj + k_proj + v_proj   (attention input GEMM)
+#   * ``gate_up_proj``  <- gate_proj + up_proj        (MLP input GEMM)
+#
+# ``down_proj`` and ``o_proj`` are standalone GEMMs in vLLM and are therefore
+# left free to learn independent bit-widths.
+VLLM_FUSED_GROUPS = {
+    "qkv_proj": ("q_proj", "k_proj", "v_proj"),
+    "gate_up_proj": ("gate_proj", "up_proj"),}
+
+
+def _module_group_key(name: str):
+    """Return ``(prefix, group)`` if ``name`` is a fused-group member, else None.
+
+    ``prefix`` is the module path up to (but excluding) the projection suffix, so
+    that projections belonging to the *same* decoder layer are grouped together
+    and projections in different layers stay independent.
+    """
+    for group, suffixes in VLLM_FUSED_GROUPS.items():
+        for suffix in suffixes:
+            token = "." + suffix
+            if name.endswith(token):
+                prefix = name[:-len(token)]
+                return prefix, group
+            if name == suffix:
+                return "", group
+    return None
+
+
+def _collect_vllm_fused_groups(model: torch.nn.Module):
+    """Group ``QuantLinear`` modules by their vLLM fused-GEMM membership.
+
+    Returns a mapping ``(prefix, group) -> [QuantLinear, ...]`` where each value
+    is the list of quantised projections that vLLM would pack into one GEMM.
+    Only groups with more than one member are returned (a lone projection needs
+    no cross-layer tying).
+    """
+    groups: dict = {}
+    for name, m in model.named_modules():
+        if not isinstance(m, qnn.QuantLinear):
+            continue
+        key = _module_group_key(name)
+        if key is None:
+            continue
+        groups.setdefault(key, []).append(m)
+    return {k: v for k, v in groups.items() if len(v) > 1}
+
+
+# ---------------------------------------------------------------------------
 # Bit-width tying helper
 # ---------------------------------------------------------------------------
+def _tie_layer_bit_widths(m: "qnn.QuantLinear", master_offset=None):
+    """Tie all bit-width offsets of a single ``QuantLinear`` to one parameter.
+
+    If ``master_offset`` is ``None`` the module's own activation mantissa offset
+    becomes the master; otherwise ``master_offset`` (shared with other modules)
+    is used, which is how cross-layer vLLM fused-group tying is achieved.
+
+    Returns the master offset used, or ``None`` if the module has no learned
+    bit-width parameters.
+    """
+    act_tq = m.input_quant.fused_activation_quant_proxy.tensor_quant
+    weight_tq = m.weight_quant.tensor_quant
+    if not hasattr(act_tq.mantissa_bit_width_impl, "bit_width_offset"):
+        return None
+    if master_offset is None:
+        master_offset = act_tq.mantissa_bit_width_impl.bit_width_offset
+    else:
+        act_tq.mantissa_bit_width_impl.bit_width_offset = master_offset
+    # Tie activation exponent to the master
+    if hasattr(act_tq.exponent_bit_width_impl, "bit_width_offset"):
+        act_tq.exponent_bit_width_impl.bit_width_offset = master_offset
+    # Tie weight mantissa to the master
+    weight_tq.mantissa_bit_width_impl.bit_width_offset = master_offset
+    # Tie weight exponent to the master
+    if hasattr(weight_tq.exponent_bit_width_impl, "bit_width_offset"):
+        weight_tq.exponent_bit_width_impl.bit_width_offset = master_offset
+    return master_offset
+
+
 def _tie_bit_widths(model: torch.nn.Module, args) -> None:
     """Tie mantissa and exponent bit-width offsets within each ``QuantLinear``.
 
-    For every ``QuantLinear`` module with learned bit-width parameters:
+    For every ``QuantLinear`` module with learned bit-width parameters, a single
+    learnable offset controls all four (act mantissa, act exponent, weight
+    mantissa, weight exponent) bit-width offsets per layer.
 
-    1. The **activation** exponent ``bit_width_offset`` is set to point
-       to the same tensor as the activation mantissa ``bit_width_offset``.
-    2. The **weight** mantissa ``bit_width_offset`` is tied to the
-       activation mantissa ``bit_width_offset``.
-    3. The **weight** exponent ``bit_width_offset`` is tied to the
-       weight mantissa ``bit_width_offset``.
-
-    This ensures a single learnable offset controls all four
-    (act mantissa, act exponent, weight mantissa, weight exponent)
-    bit-width offsets per layer.
+    When ``args.tie_vllm_fused_groups`` is enabled (the default), the tying is
+    additionally extended **across** the projections that vLLM fuses into a
+    single GEMM: the q/k/v projections share one offset, and the gate/up
+    projections share another, per decoder layer. This guarantees the exported
+    model is loadable by vLLM's fused ``qkv_proj`` / ``gate_up_proj`` kernels,
+    which require every packed projection to use the same numerical format.
     """
+    tie_fused = getattr(args, "tie_vllm_fused_groups", False)
+
+    # Identify which modules belong to a shared vLLM fused GEMM.
+    fused_groups = _collect_vllm_fused_groups(model) if tie_fused else {}
+    module_to_master: dict = {}
+    for (prefix, group), members in fused_groups.items():
+        # Establish a single master offset for the whole group from the first
+        # member that actually exposes learned bit-width parameters.
+        master = None
+        for member in members:
+            master = _tie_layer_bit_widths(member, master_offset=None)
+            if master is not None:
+                break
+        if master is None:
+            continue
+        for member in members:
+            module_to_master[id(member)] = master
+
+    # Tie every QuantLinear. Members of a fused group use the shared master;
+    # standalone projections (o_proj, down_proj, lm_head, ...) tie internally.
     for m in model.modules():
         if not isinstance(m, qnn.QuantLinear):
             continue
-        act_tq = m.input_quant.fused_activation_quant_proxy.tensor_quant
-        weight_tq = m.weight_quant.tensor_quant
-        if not hasattr(act_tq.mantissa_bit_width_impl, "bit_width_offset"):
-            continue
-        # Get the activation mantissa offset -- this is the master parameter.
-        act_mantissa_offset = act_tq.mantissa_bit_width_impl.bit_width_offset
-        # Tie activation exponent to activation mantissa
-        if hasattr(act_tq.exponent_bit_width_impl, "bit_width_offset"):
-            act_tq.exponent_bit_width_impl.bit_width_offset = act_mantissa_offset
-        # Tie weight mantissa to activation mantissa
-        weight_tq.mantissa_bit_width_impl.bit_width_offset = act_mantissa_offset
-        # Tie weight exponent to weight mantissa
-        if hasattr(weight_tq.exponent_bit_width_impl, "bit_width_offset"):
-            weight_tq.exponent_bit_width_impl.bit_width_offset = act_mantissa_offset
+        _tie_layer_bit_widths(m, master_offset=module_to_master.get(id(m)))
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +324,15 @@ class RotationLearnedBitWidthTrainingArguments(TrainingArguments):
         metadata={
             "help":
                 "If True, use simple average bit-width for loss. Otherwise, use weighted average"})
+
+    tie_vllm_fused_groups: bool = field(
+        default=True,
+        metadata={
+            "help":
+                "If True, tie the learned bit-width offsets across the projections that vLLM fuses "
+                "into a single GEMM (q/k/v -> qkv_proj and gate/up -> gate_up_proj) so the exported "
+                "model is compatible with vLLM's fused kernels. If False, every projection learns an "
+                "independent bit-width."})
 
     def __post_init__(self):
         super().__post_init__()

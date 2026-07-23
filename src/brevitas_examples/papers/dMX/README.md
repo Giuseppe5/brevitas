@@ -11,7 +11,7 @@ YAML configurations.
 
 | File | Description |
 |---|---|
-| `custom_trainer.py` | Registers the `rotation_learned_bitwidth` trainer into `TRAINER_REGISTRY`. Jointly optimises rotations (CaileySGD) and learned float bit-widths (SGD), with a bit-width regularisation penalty and temperature annealing. |
+| `custom_trainer.py` | Registers the `rotation_learned_bitwidth` trainer into `TRAINER_REGISTRY`. Jointly optimises rotations (CaileySGD) and learned float bit-widths (SGD), with a bit-width regularisation penalty and temperature annealing. Ties bit-widths across vLLM fused projections (`qkv_proj`, `gate_up_proj`) so the result is vLLM-loadable. |
 | `learned_float_quantizer.py` | Registers the `learned_float` and `mxfp6_learned_float` quantizers into `QUANTIZERS_REGISTRY`. |
 | `benchmark.py` | Benchmark entrypoint. Importing it registers the quantizer and trainer as an import side effect, so they can be referenced by bare name in the YAML. It also raises the `torch._dynamo` recompilation limit. |
 | `benchmark/mxfp8_mixed_precision.yaml` | MXFP8 mixed-precision sweep (`custom_quantizer: learned_float`). |
@@ -91,6 +91,27 @@ Key training arguments exposed by `rotation_learned_bitwidth`:
 | `delay_start` | Fraction of `max_steps` to wait before starting temperature annealing. |
 | `optimizer_dtype` | Dtype for the CaileySGD computations (e.g. `float32`). |
 | `simple_average_loss` | If `true`, use the simple (unweighted) average bit-width for the loss; otherwise weight by tensor size. |
+| `tie_vllm_fused_groups` | If `true` (default), tie the learned bit-width across the projections vLLM fuses into one GEMM so the exported model is vLLM-compatible; if `false`, every projection learns independently. |
 
 In the example YAMLs, `target_bit_width` is swept over a range of targets to
 trace the accuracy/bit-width trade-off, while everything else is held fixed.
+
+## vLLM compatibility
+
+vLLM fuses several HuggingFace `nn.Linear` layers into a single packed GEMM for
+throughput. For Llama-style models this means:
+
+* `q_proj`, `k_proj`, `v_proj` → `qkv_proj`
+* `gate_proj`, `up_proj` → `gate_up_proj`
+
+A fused kernel requires every projection packed into the same GEMM to use an
+identical numerical format. When the learned float bit-width is optimised
+per-projection, q/k/v (and gate/up) would otherwise converge to different
+bit-widths and the fused checkpoint could not be loaded by vLLM.
+
+To prevent this, the trainer ties the learned bit-width **offset** across each
+fused group: a single learnable parameter drives the (activation mantissa,
+activation exponent, weight mantissa, weight exponent) offsets of all members of
+a group, per decoder layer. `o_proj` and `down_proj` are standalone GEMMs in
+vLLM and keep independent bit-widths. This behaviour is on by default and can be
+disabled with `tie_vllm_fused_groups: false`.
