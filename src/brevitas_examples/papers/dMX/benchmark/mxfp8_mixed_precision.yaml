@@ -122,5 +122,4 @@ optimizer_dtype:
 custom_quantizer:
 - learned_float
 bw_learning_rate:
-# - 0.5
 - 1.

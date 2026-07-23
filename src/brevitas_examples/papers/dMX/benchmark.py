@@ -10,8 +10,7 @@ import torch
 # limit is too low.
 torch._dynamo.config.recompile_limit = 1000
 
-from brevitas_examples.common.benchmark.utils import benchmark
-from brevitas_examples.llm.benchmark.llm_benchmark import LLMBenchmarkUtils
+from brevitas_examples.llm.benchmark.llm_benchmark import LLMGridBenchmark
 # Importing these modules registers the custom trainer into TRAINER_REGISTRY and
 # the learned-float quantizers into QUANTIZERS_REGISTRY as an import side effect.
 # This lets the benchmark YAML refer to them by bare name (e.g.
@@ -21,9 +20,9 @@ import brevitas_examples.papers.dMX.custom_trainer  # noqa: F401
 import brevitas_examples.papers.dMX.learned_float_quantizer  # noqa: F401
 
 
-class DMXBenchmark(LLMBenchmarkUtils):
+class DMXBenchmark(LLMGridBenchmark):
     pass
 
 
 if __name__ == "__main__":
-    benchmark(DMXBenchmark, sys.argv[1:])
+    DMXBenchmark.run(sys.argv[1:])
