@@ -113,6 +113,23 @@ class MXFloat8e4m3WeightMSE(MSESymmetricScale, MXFloat8e4m3Weight):
     pass
 
 
+class MXFloat4e2m1Weight(MXWeightMixin,
+                         GroupwiseWeightFloatProxyMixin,
+                         FpOCPWeight,
+                         ScaledFloatWeightBase):
+    """MXFP4 E2M1 signed weight quantizer."""
+    bit_width = 4
+    exponent_bit_width = 2
+    mantissa_bit_width = 1
+
+
+class MXFloat4e2m1Act(MXActMixin, GroupwiseActFloatProxyMixin, FpOCPAct, ScaledFloatActBase):
+    """MXFP4 E2M1 signed activation quantizer."""
+    bit_width = 4
+    exponent_bit_width = 2
+    mantissa_bit_width = 1
+
+
 class MXInt8Weight(MXWeightMixin,
                    GroupwiseWeightProxyMixin,
                    IntQuant,

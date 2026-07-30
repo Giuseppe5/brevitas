@@ -196,11 +196,12 @@ class BaseManager(ABC):
         module.apply(lambda m: _override_quant_metadata_caching_mode(m, enabled=True))
         module.apply(lambda m: _override_bias_caching_mode(m, enabled=True))
         module.apply(lambda m: _override_act_caching_mode(m, enabled=True))
-        _ = module.forward(*args, **kwargs)
-        # Restore previous caching properties
-        module.apply(lambda m: _restore_quant_metadata_caching_mode(m))
-        module.apply(lambda m: _restore_bias_caching_mode(m))
-        module.apply(lambda m: _restore_act_caching_mode(m))
+        try:
+            _ = module.forward(*args, **kwargs)
+        finally:
+            module.apply(lambda m: _restore_quant_metadata_caching_mode(m))
+            module.apply(lambda m: _restore_bias_caching_mode(m))
+            module.apply(lambda m: _restore_act_caching_mode(m))
 
     @classmethod
     def jit_inference_trace(

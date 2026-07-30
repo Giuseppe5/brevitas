@@ -12,6 +12,7 @@ from .onnx.qonnx.manager import QONNXDynamoManager
 from .onnx.qonnx.manager import QONNXManager
 from .onnx.standard.qcdq.manager import StdQCDQONNXDynamoManager
 from .onnx.standard.qcdq.manager import StdQCDQONNXManager
+from .torch.qcdq.manager import TorchQCDQExportManager
 from .torch.qcdq.manager import TorchQCDQManager
 
 # The `dynamo` keyword was added to torch.onnx.export in PyTorch 2.5; on older
@@ -69,5 +70,7 @@ def export_onnx_qcdq(*args, **kwargs):
 
 
 @wraps(TorchQCDQManager.export)
-def export_torch_qcdq(*args, **kwargs):
+def export_torch_qcdq(*args, dynamo=False, **kwargs):
+    if dynamo:
+        return TorchQCDQExportManager.export(*args, **kwargs)
     return TorchQCDQManager.export(*args, **kwargs)
