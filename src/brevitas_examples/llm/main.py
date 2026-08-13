@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM
 from transformers import AutoTokenizer
 
+import brevitas.nn as qnn
 from brevitas.export.inference.manager import quant_inference_mode
 from brevitas.export.onnx.standard.qcdq.manager import StdQCDQONNXManager
 from brevitas.graph import load_quant_model_mode
@@ -89,6 +90,7 @@ patch_dynamo_export()
 
 
 def filter_results(results, tasks):
+    """Keep scalar evaluation results for the requested tasks."""
     # filter out what we actually want to track
     eval_results = dict()
     for task_name in tasks:
@@ -99,6 +101,31 @@ def filter_results(results, tasks):
                 name = f"{task_name}_{key}"
                 eval_results[name] = val
     return eval_results
+
+
+def _functional_quant_map(quantizers_dict):
+    """Build functional specs for fused SDPA and unconverted linear projections.
+
+    Some MoE implementations evaluate expert projections through ``F.linear``
+    instead of registered ``nn.Linear`` modules. Existing ``QuantLinear``
+    modules are skipped so their regular Brevitas quantization path remains the
+    sole quantizer for those calls.
+    """
+    def skip_quant_linear(module, module_name, call_index, quantizer):
+        """Return no quantizer for an already converted Brevitas linear module."""
+        return None if isinstance(module, qnn.QuantLinear) else quantizer
+
+    linear_input_quant = quantizers_dict['linear_input_quant']
+    weight_quant = quantizers_dict['weight_quant']
+    return {
+        torch.nn.functional.linear: (
+            lambda module, name, index: skip_quant_linear(
+                module, name, index, linear_input_quant),
+            lambda module, name, index: skip_quant_linear(module, name, index, weight_quant)),
+        torch.nn.functional.scaled_dot_product_attention: (
+            quantizers_dict.get('q_scaled_quant'),
+            quantizers_dict.get('k_transposed_quant'),
+            quantizers_dict.get('v_quant'))}
 
 
 def fused_rotation_no_fx(model, calibration_loader, args):
@@ -486,10 +513,7 @@ def quantize_llm(args, extra_args=None):
             quantizer_name = parse_custom_quantizer(args.custom_quantizer)
             custom_quantizer = QUANTIZERS_REGISTRY.get(quantizer_name)
             quantizers_dict = custom_quantizer.override_quantizers_dict(quantizers_dict)
-        # Save SDPA quantizers for the functional quantization mode context manager
-        sdpa_q_quant = quantizers_dict.get('q_scaled_quant')
-        sdpa_k_quant = quantizers_dict.get('k_transposed_quant')
-        sdpa_v_quant = quantizers_dict.get('v_quant')
+        functional_quant_map = _functional_quant_map(quantizers_dict)
         layer_map = generate_quant_maps(
             **quantizers_dict, dtype=dtype, device=device, quantize_embedding=False)
         if not args.quantize_last_layer:
@@ -564,17 +588,9 @@ def quantize_llm(args, extra_args=None):
     # If we are doing functional SDPA quantization, we create the correct context manager,
     # otherwise nullcontext. We would love to avoid the extra indentation level but it doesn't seem easy.
     if args.quant_sdpa == "functional":
-        # The Q/K/V quantizers already carry their dependency-injection attributes
-        # (e.g. group_dim) via let(), so no extra DI kwargs are needed in the spec.
-        sdpa_quant_map = {
-            torch.nn.functional.scaled_dot_product_attention:
-                (sdpa_q_quant, sdpa_k_quant, sdpa_v_quant)}
-        # Preparation phase: create the SDPA quantizers by running one example
-        # forward, then apply them within the context manager below. SDPA has no
-        # weight parameters, so parametrization teardown is a no-op here. The
-        # prepared quantizers deliberately remain on the returned model for reuse.
+        # Preparation covers fused SDPA plus MoE-style functional expert projections.
         fq_state = prepare_functional_quantization(
-            model, sdpa_quant_map, example_kwargs=next(iter(calibration_loader)))
+            model, functional_quant_map, example_kwargs=next(iter(calibration_loader)))
         quantization_cm = functional_quantization_mode(
             fq_state, remove_parametrizations_on_exit=True)
     else:
