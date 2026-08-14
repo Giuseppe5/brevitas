@@ -67,8 +67,16 @@ RTOL_ACC = 1e-5
 @requires_pt_ge('2.0')
 def test_functional_quant_map_includes_expert_linear_quantizers():
     """The LLM functional map covers F.linear calls used by MoE experts."""
+    class Quantizer:
+
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+        def let(self, **kwargs):
+            return Quantizer(**kwargs)
+
     linear_input_quant = object()
-    weight_quant = object()
+    weight_quant = Quantizer()
     quant_map = _functional_quant_map({
         'linear_input_quant': linear_input_quant,
         'weight_quant': weight_quant,
@@ -80,6 +88,14 @@ def test_functional_quant_map_includes_expert_linear_quantizers():
     module = nn.Identity()
     assert input_resolver(module, 'expert', 0) is linear_input_quant
     assert weight_resolver(module, 'expert', 0) is weight_quant
+
+    qwen_experts = type('Qwen3MoeExperts', (nn.Module,), {})()
+    assert weight_resolver(qwen_experts, 'experts', 0).output_channel_dim == 1
+
+    _, matmul_weight_resolver = quant_map[torch.matmul]
+    gpt_oss_experts = type('GptOssExperts', (nn.Module,), {})()
+    assert matmul_weight_resolver(gpt_oss_experts, 'experts', 0).output_channel_dim == 2
+    assert quant_map[torch.Tensor.__matmul__] == quant_map[torch.matmul]
 
 
 def mock_load_raw_dataset(dataset_name: str, split: str, seed: int = 42) -> Dataset:

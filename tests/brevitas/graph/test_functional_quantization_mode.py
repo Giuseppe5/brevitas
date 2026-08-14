@@ -20,6 +20,7 @@ from brevitas.quant.experimental.mx_quant_ocp import MXInt8Weight
 from brevitas.quant.scaled_int import Int8ActPerTensorFloat
 from brevitas.quant.scaled_int import Int8WeightPerChannelFloat
 from brevitas.quant.scaled_int import Int8WeightPerTensorFloat
+from brevitas.quant_tensor import IntQuantTensor
 from tests.marker import requires_pt_ge
 
 
@@ -97,6 +98,28 @@ class MatmulWeightModel(nn.Module):
         return torch.matmul(x, self.weight)
 
 
+class QwenMoeExpertModel(nn.Module):
+    """Qwen-style experts stored as [expert, output, input] weights."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.expert_weight = nn.Parameter(torch.randn(2, 6, 4))
+
+    def forward(self, x: Tensor, expert_idx: int) -> Tensor:
+        return F.linear(x, self.expert_weight[expert_idx])
+
+
+class GptOssExpertModel(nn.Module):
+    """GPT-OSS-style experts stored as [expert, input, output] weights."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.expert_weight = nn.Parameter(torch.randn(2, 4, 6))
+
+    def forward(self, x: Tensor, expert_idx: int) -> Tensor:
+        return x @ self.expert_weight[expert_idx]
+
+
 class FunctionalConvTranspose1dModel(nn.Module):
     """Model that calls F.conv_transpose1d with a parameter weight."""
 
@@ -134,6 +157,22 @@ class CheckpointedTwoLinearModel(nn.Module):
 
 @requires_pt_ge('1.12')
 class TestFunctionalQuantizationMode:
+
+    def test_quant_tensor_expert_slice_preserves_metadata(self):
+        """Selecting one stacked expert preserves aligned quantization metadata."""
+        quant_tensor = IntQuantTensor(
+            value=torch.randn(2, 3, 4),
+            scale=torch.ones(2, 3, 1),
+            zero_point=torch.zeros(2, 3, 1),
+            bit_width=torch.tensor(8.),
+            signed=True,
+            training=False)
+
+        expert = quant_tensor[1]
+        assert isinstance(expert, IntQuantTensor)
+        assert expert.value.shape == (3, 4)
+        assert expert.scale.shape == (3, 1)
+        assert expert.zero_point.shape == (3, 1)
 
     def test_context_manager_basic(self):
         """Test that the context manager runs without error."""
@@ -239,6 +278,40 @@ class TestFunctionalQuantizationMode:
         assert is_parametrized(model.block, 'weight1')
         assert is_parametrized(model.block, 'weight2')
         assert len([key for key in state.quantizers if key.endswith('_wq')]) == 2
+        state.cleanup()
+
+    def test_qwen_moe_expert_weight_view_is_quantized_as_a_stack(self):
+        """A Qwen expert slice reuses one full-stack weight quantizer."""
+        model = QwenMoeExpertModel()
+        x = torch.randn(2, 4)
+        quant_map = {
+            F.linear: (
+                Int8ActPerTensorFloat,
+                (Int8WeightPerTensorFloat, {'output_channel_dim': 1, 'group_dim': 2}))}
+
+        state = prepare_functional_quantization(model, quant_map, example_inputs=(x, 0))
+        assert not is_parametrized(model, 'expert_weight')
+        assert len([key for key in state.quantizers if key.endswith('_wq')]) == 1
+        with functional_quantization_mode(state):
+            out = model(x, 1)
+        assert out.shape == (2, 6)
+        state.cleanup()
+
+    def test_gpt_oss_expert_weight_view_is_quantized_as_a_stack(self):
+        """A GPT-OSS expert slice uses the explicit matmul stack layout."""
+        model = GptOssExpertModel()
+        x = torch.randn(2, 4)
+        quant_map = {
+            torch.matmul: (
+                None,
+                (Int8WeightPerTensorFloat, {'output_channel_dim': 2, 'group_dim': 1}))}
+
+        state = prepare_functional_quantization(model, quant_map, example_inputs=(x, 0))
+        assert not is_parametrized(model, 'expert_weight')
+        assert len([key for key in state.quantizers if key.endswith('_wq')]) == 1
+        with functional_quantization_mode(state):
+            out = model(x, 1)
+        assert out.shape == (2, 6)
         state.cleanup()
 
     def test_missing_second_runtime_spec_reuses_first_quantizer(self):

@@ -111,17 +111,34 @@ def _functional_quant_map(quantizers_dict):
     modules are skipped so their regular Brevitas quantization path remains the
     sole quantizer for those calls.
     """
-    def skip_quant_linear(module, module_name, call_index, quantizer):
+    def select_weight_quant(module, module_name, call_index, quantizer, expert_quantizer=None):
         """Return no quantizer for an already converted Brevitas linear module."""
-        return None if isinstance(module, qnn.QuantLinear) else quantizer
+        if isinstance(module, qnn.QuantLinear):
+            return None
+        if expert_quantizer is not None and (
+                type(module).__name__.endswith('MoeExperts') or
+                type(module).__name__ == 'GptOssExperts'):
+            return expert_quantizer
+        return quantizer
 
     linear_input_quant = quantizers_dict['linear_input_quant']
     weight_quant = quantizers_dict['weight_quant']
+    # Qwen expert stacks are [expert, output, input], while GPT-OSS expert
+    # stacks are [expert, input, output]. Group along each operator's input axis.
+    qwen_expert_weight_quant = weight_quant.let(output_channel_dim=1, group_dim=2)
+    gpt_oss_expert_weight_quant = weight_quant.let(output_channel_dim=2, group_dim=1)
+    matmul_spec = (
+        None,
+        lambda module, name, index: select_weight_quant(
+            module, name, index, None, gpt_oss_expert_weight_quant))
     return {
         torch.nn.functional.linear: (
-            lambda module, name, index: skip_quant_linear(
+            lambda module, name, index: select_weight_quant(
                 module, name, index, linear_input_quant),
-            lambda module, name, index: skip_quant_linear(module, name, index, weight_quant)),
+            lambda module, name, index: select_weight_quant(
+                module, name, index, weight_quant, qwen_expert_weight_quant)),
+        torch.matmul: matmul_spec,
+        torch.Tensor.__matmul__: matmul_spec,
         torch.nn.functional.scaled_dot_product_attention: (
             quantizers_dict.get('q_scaled_quant'),
             quantizers_dict.get('k_transposed_quant'),

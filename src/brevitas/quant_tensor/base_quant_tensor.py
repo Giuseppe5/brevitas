@@ -106,6 +106,27 @@ class QuantTensor(Tensor):
         ctor_kwargs.pop('value_', None)
         return type(self)(new_value, **ctor_kwargs)
 
+    def __getitem__(self, index):
+        """Slice a quantized tensor while retaining leading-dimension metadata.
+
+        MoE expert weights are commonly stored as ``[expert, ...]`` stacks.
+        Selecting an expert must slice the quantized value and any per-expert
+        metadata together, rather than discarding quantization information.
+        """
+        if not isinstance(index, (int, slice)):
+            raise TypeError('QuantTensor slicing supports an integer or slice expert index.')
+        qt_type = type(self)
+        values = []
+        value_shape = self.value.shape
+        for field in self._fields:
+            value = getattr(self, field)
+            if isinstance(value, Tensor) and value.dim() > 0 and value.shape[0] == value_shape[0]:
+                value = value[index]
+            elif field == 'dequant_shape' and value is not None:
+                value = value[1:]
+            values.append(value)
+        return qt_type(*values)
+
     @property
     def shape(self):
         return self.value.shape
