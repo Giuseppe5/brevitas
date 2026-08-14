@@ -26,13 +26,13 @@ from torch.utils.hooks import RemovableHandle
 
 from brevitas import torch_version
 from brevitas.nn import QuantIdentity
-from brevitas.quant_tensor import _unpack_quant_tensor
 from brevitas.quant_tensor import QuantTensor
 
 # Runtime quantization for calls to torch functional operators.
 
 __all__ = [
     'FunctionalQuantState',
+    'FunctionalWeightDescriptor',
     'functional_quantization_mode',
     'prepare_functional_quantization',
     'remove_functional_quantization']
@@ -55,6 +55,8 @@ _FUNCTION_ARGUMENT_NAMES = {
     torch.nn.functional.conv_transpose1d: ('input', 'weight', 'bias'),
     torch.nn.functional.conv_transpose2d: ('input', 'weight', 'bias'),
     torch.nn.functional.conv_transpose3d: ('input', 'weight', 'bias'),}
+if hasattr(torch.Tensor, '__matmul__'):
+    _FUNCTION_ARGUMENT_NAMES[torch.Tensor.__matmul__] = ('input', 'other')
 if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
     _FUNCTION_ARGUMENT_NAMES[torch.nn.functional.scaled_dot_product_attention] = (
         'query', 'key', 'value')
@@ -111,6 +113,7 @@ def _module_key(
         weight: bool = False) -> str:
     # ModuleDict names must not contain dots. The configured function ordinal makes
     # same-named callables distinct without process-specific object IDs.
+
     """Create a deterministic ``ModuleDict`` key for a call-site quantizer."""
     safe_module = module_name.replace('.', '__') or 'root'
     func_name = getattr(func, '__name__', 'function')
@@ -163,7 +166,17 @@ class _QuantParametrization(nn.Module):
         """Return the original parameter or its quantized proxy output."""
         if not self._state.enabled:
             return value
-        return _unpack_quant_tensor(self.proxy(value))
+        return self.proxy(value)
+
+
+@dataclass(frozen=True)
+class FunctionalWeightDescriptor:
+    """Declare stacked weight parameters to quantize on matching modules."""
+
+    module_matcher: Callable[[nn.Module], bool]
+    parameter_names: Tuple[str, ...]
+    quantizer: Type
+    di_kwargs: Dict[str, Any]
 
 
 @dataclass
@@ -184,10 +197,16 @@ class FunctionalQuantState:
     :meth:`cleanup` or :func:`remove_functional_quantization` to remove them.
     """
 
-    def __init__(self, model: nn.Module, quant_map: Dict[Callable, QuantSpecType]) -> None:
+    def __init__(
+        self,
+        model: nn.Module,
+        quant_map: Dict[Callable, QuantSpecType],
+        weight_descriptors: Tuple[FunctionalWeightDescriptor, ...] = ()
+    ) -> None:
         """Attach the retained quantizer container and initialize prepared state."""
         self.model = model
         self.quant_map = quant_map
+        self.weight_descriptors = weight_descriptors
         self.specs = _parse_quant_map(quant_map)
         self.function_indices = {func: index for index, func in enumerate(self.specs)}
         self.arg_quant_map = {
@@ -275,19 +294,18 @@ class _HookedMode(TorchFunctionMode):
         self.counters.clear()
 
     def _pre_hook(self, name: str) -> Callable:
-
         """Create a pre-hook that records entry into a named module."""
+
         def hook(module: nn.Module, args: Tuple[Any, ...]) -> None:
-            """Perform this functional quantization operation."""
             self.module_stack.append((name, module))
+            self._on_module_enter(name, module)
 
         return hook
 
     def _post_hook(self, name: str) -> Callable:
-
         """Create an always-call hook that removes a completed module entry."""
+
         def hook(module: nn.Module, args: Tuple[Any, ...], output: Any) -> None:
-            """Perform this functional quantization operation."""
             if self.module_stack and self.module_stack[-1][0] == name:
                 self.module_stack.pop()
 
@@ -297,6 +315,10 @@ class _HookedMode(TorchFunctionMode):
         """Clear per-forward state after the top-level model invocation."""
         self.module_stack.clear()
         self.counters.clear()
+
+    def _on_module_enter(self, name: str, module: nn.Module) -> None:
+        """Allow subclasses to prepare module-local quantization state."""
+        pass
 
     def _build_parameter_owners(self) -> None:
         """Map each direct model parameter to its owning module attribute."""
@@ -340,6 +362,7 @@ class _HookedMode(TorchFunctionMode):
             self, quant_class: Type, di_kwargs: Dict[str, Any], value: nn.Parameter) -> nn.Module:
         # Per-channel/groupwise operations must override this explicitly. A scalar
         # weight quantizer keeps the standard linear-layout default.
+
         """Create a weight proxy using explicit functional-operation metadata."""
         output_channel_dim = di_kwargs.get('output_channel_dim', 0)
         holder = _WeightQuantHolder(value, output_channel_dim)
@@ -348,6 +371,29 @@ class _HookedMode(TorchFunctionMode):
 
 
 class _FunctionalQuantBuilder(_HookedMode):
+
+    def _on_module_enter(self, name: str, module: nn.Module) -> None:
+        """Parametrize declared stacked expert weights before expert indexing."""
+        for descriptor_index, descriptor in enumerate(self.state.weight_descriptors):
+            if not descriptor.module_matcher(module):
+                continue
+            for parameter_name in descriptor.parameter_names:
+                parameter = getattr(module, parameter_name, None)
+                if parameter is None:
+                    raise RuntimeError(
+                        f"MoE descriptor expected parameter '{parameter_name}' in module '{name}'.")
+                if is_parametrized(module, parameter_name):
+                    continue
+                if not isinstance(parameter, nn.Parameter):
+                    raise RuntimeError(
+                        f"MoE descriptor parameter '{parameter_name}' in module '{name}' is not a Parameter."
+                    )
+                key = f'_fq_{name.replace(".", "__") or "root"}_expert_{descriptor_index}_{parameter_name}_wq'
+                proxy = self._create_weight(descriptor.quantizer, descriptor.di_kwargs, parameter)
+                self._add_quantizer(key, proxy)
+                register_parametrization(
+                    module, parameter_name, _QuantParametrization(self.state, proxy))
+                self.state.registered_parametrizations.append((module, parameter_name))
 
     def build(
             self, example_inputs: Optional[Tuple[Any, ...]],
@@ -496,15 +542,17 @@ class _FunctionalQuantInterceptor(TorchFunctionMode):
 
 
 def prepare_functional_quantization(
-        model: nn.Module,
-        quant_map: Dict[Callable, QuantSpecType],
-        example_inputs: Optional[Tuple[Any, ...]] = None,
-        example_kwargs: Optional[Dict[str, Any]] = None) -> FunctionalQuantState:
+    model: nn.Module,
+    quant_map: Dict[Callable, QuantSpecType],
+    example_inputs: Optional[Tuple[Any, ...]] = None,
+    example_kwargs: Optional[Dict[str, Any]] = None,
+    weight_descriptors: Tuple[FunctionalWeightDescriptor, ...] = ()
+) -> FunctionalQuantState:
     """Discover functional call sites and instantiate their quantizers."""
     if example_inputs is None and example_kwargs is None:
         raise ValueError(
             'prepare_functional_quantization requires example_inputs and/or example_kwargs.')
-    state = FunctionalQuantState(model, quant_map)
+    state = FunctionalQuantState(model, quant_map, weight_descriptors)
     return _FunctionalQuantBuilder(state).build(example_inputs, example_kwargs)
 
 

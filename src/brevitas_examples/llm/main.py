@@ -24,10 +24,12 @@ from brevitas.graph.equalize import GraphRotationEqualization
 from brevitas.graph.equalize import LayerwiseActivationRotation
 from brevitas.graph.permute import rotate_permute_mode
 from brevitas.graph.quantize import functional_quantization_mode
+from brevitas.graph.quantize import FunctionalWeightDescriptor
 from brevitas.graph.quantize import layerwise_quantize
 from brevitas.graph.quantize import prepare_functional_quantization
 from brevitas.graph.utils import get_module
 from brevitas.graph.utils import remove_weight_orig
+import brevitas.nn as qnn
 from brevitas.utils.logging import setup_logger
 from brevitas.utils.python_utils import hooked_on_a_function
 from brevitas_examples.common.accelerate_utils.accelerate import offload_model
@@ -89,6 +91,7 @@ patch_dynamo_export()
 
 
 def filter_results(results, tasks):
+    """Keep scalar evaluation results for the requested tasks."""
     # filter out what we actually want to track
     eval_results = dict()
     for task_name in tasks:
@@ -99,6 +102,62 @@ def filter_results(results, tasks):
                 name = f"{task_name}_{key}"
                 eval_results[name] = val
     return eval_results
+
+
+def _functional_quant_map(quantizers_dict):
+    """Build functional specs for fused SDPA and unconverted linear projections.
+
+    Some MoE implementations evaluate expert projections through ``F.linear``
+    instead of registered ``nn.Linear`` modules. Existing ``QuantLinear``
+    modules are skipped so their regular Brevitas quantization path remains the
+    sole quantizer for those calls.
+    """
+
+    def select_weight_quant(module, module_name, call_index, quantizer):
+        """Return no quantizer for an already converted Brevitas linear module."""
+        if isinstance(module, qnn.QuantLinear):
+            return None
+        return quantizer
+
+    linear_input_quant = quantizers_dict['linear_input_quant']
+    weight_quant = quantizers_dict['weight_quant']
+    matmul_spec = (
+        lambda module,
+        name,
+        index: linear_input_quant if type(module).__name__ == 'GptOssExperts' else None,
+        None)
+    return {
+        torch.nn.functional.linear: (
+            lambda module,
+            name,
+            index: select_weight_quant(module, name, index, linear_input_quant),
+            lambda module,
+            name,
+            index: select_weight_quant(module, name, index, weight_quant)),
+        torch.matmul:
+            matmul_spec,
+        torch.Tensor.__matmul__:
+            matmul_spec,
+        torch.nn.functional.scaled_dot_product_attention: (
+            quantizers_dict.get('q_scaled_quant'),
+            quantizers_dict.get('k_transposed_quant'),
+            quantizers_dict.get('v_quant'))}
+
+
+def _moe_weight_descriptors(quantizers_dict):
+    """Describe official eager Qwen and GPT-OSS stacked expert weights."""
+    weight_quant = quantizers_dict['weight_quant']
+    return (
+        FunctionalWeightDescriptor(
+            module_matcher=lambda module: type(module).__name__.endswith('MoeExperts'),
+            parameter_names=('gate_up_proj', 'down_proj'),
+            quantizer=weight_quant.let(output_channel_dim=1, group_dim=2),
+            di_kwargs={}),
+        FunctionalWeightDescriptor(
+            module_matcher=lambda module: type(module).__name__ == 'GptOssExperts',
+            parameter_names=('gate_up_proj', 'down_proj'),
+            quantizer=weight_quant.let(output_channel_dim=2, group_dim=1),
+            di_kwargs={}))
 
 
 def fused_rotation_no_fx(model, calibration_loader, args):
@@ -486,10 +545,8 @@ def quantize_llm(args, extra_args=None):
             quantizer_name = parse_custom_quantizer(args.custom_quantizer)
             custom_quantizer = QUANTIZERS_REGISTRY.get(quantizer_name)
             quantizers_dict = custom_quantizer.override_quantizers_dict(quantizers_dict)
-        # Save SDPA quantizers for the functional quantization mode context manager
-        sdpa_q_quant = quantizers_dict.get('q_scaled_quant')
-        sdpa_k_quant = quantizers_dict.get('k_transposed_quant')
-        sdpa_v_quant = quantizers_dict.get('v_quant')
+        functional_quant_map = _functional_quant_map(quantizers_dict)
+        moe_weight_descriptors = _moe_weight_descriptors(quantizers_dict)
         layer_map = generate_quant_maps(
             **quantizers_dict, dtype=dtype, device=device, quantize_embedding=False)
         if not args.quantize_last_layer:
@@ -564,17 +621,12 @@ def quantize_llm(args, extra_args=None):
     # If we are doing functional SDPA quantization, we create the correct context manager,
     # otherwise nullcontext. We would love to avoid the extra indentation level but it doesn't seem easy.
     if args.quant_sdpa == "functional":
-        # The Q/K/V quantizers already carry their dependency-injection attributes
-        # (e.g. group_dim) via let(), so no extra DI kwargs are needed in the spec.
-        sdpa_quant_map = {
-            torch.nn.functional.scaled_dot_product_attention:
-                (sdpa_q_quant, sdpa_k_quant, sdpa_v_quant)}
-        # Preparation phase: create the SDPA quantizers by running one example
-        # forward, then apply them within the context manager below. SDPA has no
-        # weight parameters, so parametrization teardown is a no-op here. The
-        # prepared quantizers deliberately remain on the returned model for reuse.
+        # Preparation covers fused SDPA plus MoE-style functional expert projections.
         fq_state = prepare_functional_quantization(
-            model, sdpa_quant_map, example_kwargs=next(iter(calibration_loader)))
+            model,
+            functional_quant_map,
+            example_kwargs=next(iter(calibration_loader)),
+            weight_descriptors=moe_weight_descriptors)
         quantization_cm = functional_quantization_mode(
             fq_state, remove_parametrizations_on_exit=True)
     else:
