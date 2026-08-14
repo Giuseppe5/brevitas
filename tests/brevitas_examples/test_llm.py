@@ -37,6 +37,7 @@ from brevitas_examples.llm.llm_quant.trainer_utils import _build_optimizers_from
 from brevitas_examples.llm.llm_quant.trainer_utils import GeneralizedTrainer
 from brevitas_examples.llm.llm_quant.trainer_utils import TRAINER_REGISTRY
 from brevitas_examples.llm.main import _functional_quant_map
+from brevitas_examples.llm.main import _moe_weight_descriptors
 from brevitas_examples.llm.main import fx_required
 from brevitas_examples.llm.main import main as llm_main
 from brevitas_examples.llm.main import quantize_llm
@@ -67,6 +68,7 @@ RTOL_ACC = 1e-5
 @requires_pt_ge('2.0')
 def test_functional_quant_map_includes_expert_linear_quantizers():
     """The LLM functional map covers F.linear calls used by MoE experts."""
+
     class Quantizer:
 
         def __init__(self, **kwargs):
@@ -89,13 +91,16 @@ def test_functional_quant_map_includes_expert_linear_quantizers():
     assert input_resolver(module, 'expert', 0) is linear_input_quant
     assert weight_resolver(module, 'expert', 0) is weight_quant
 
-    qwen_experts = type('Qwen3MoeExperts', (nn.Module,), {})()
-    assert weight_resolver(qwen_experts, 'experts', 0).output_channel_dim == 1
-
     _, matmul_weight_resolver = quant_map[torch.matmul]
     gpt_oss_experts = type('GptOssExperts', (nn.Module,), {})()
-    assert matmul_weight_resolver(gpt_oss_experts, 'experts', 0).output_channel_dim == 2
+    assert matmul_weight_resolver(gpt_oss_experts, 'experts', 0) is linear_input_quant
     assert quant_map[torch.Tensor.__matmul__] == quant_map[torch.matmul]
+
+    qwen_descriptor, gpt_oss_descriptor = _moe_weight_descriptors({'weight_quant': weight_quant})
+    assert qwen_descriptor.module_matcher(type('Qwen3MoeExperts', (nn.Module,), {})())
+    assert qwen_descriptor.quantizer.output_channel_dim == 1
+    assert gpt_oss_descriptor.module_matcher(gpt_oss_experts)
+    assert gpt_oss_descriptor.quantizer.output_channel_dim == 2
 
 
 def mock_load_raw_dataset(dataset_name: str, split: str, seed: int = 42) -> Dataset:

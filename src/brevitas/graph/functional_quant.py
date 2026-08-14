@@ -26,13 +26,13 @@ from torch.utils.hooks import RemovableHandle
 
 from brevitas import torch_version
 from brevitas.nn import QuantIdentity
-from brevitas.quant_tensor import _unpack_quant_tensor
 from brevitas.quant_tensor import QuantTensor
 
 # Runtime quantization for calls to torch functional operators.
 
 __all__ = [
     'FunctionalQuantState',
+    'FunctionalWeightDescriptor',
     'functional_quantization_mode',
     'prepare_functional_quantization',
     'remove_functional_quantization']
@@ -113,6 +113,7 @@ def _module_key(
         weight: bool = False) -> str:
     # ModuleDict names must not contain dots. The configured function ordinal makes
     # same-named callables distinct without process-specific object IDs.
+
     """Create a deterministic ``ModuleDict`` key for a call-site quantizer."""
     safe_module = module_name.replace('.', '__') or 'root'
     func_name = getattr(func, '__name__', 'function')
@@ -165,14 +166,23 @@ class _QuantParametrization(nn.Module):
         """Return the original parameter or its quantized proxy output."""
         if not self._state.enabled:
             return value
-        return _unpack_quant_tensor(self.proxy(value))
+        return self.proxy(value)
+
+
+@dataclass(frozen=True)
+class FunctionalWeightDescriptor:
+    """Declare stacked weight parameters to quantize on matching modules."""
+
+    module_matcher: Callable[[nn.Module], bool]
+    parameter_names: Tuple[str, ...]
+    quantizer: Type
+    di_kwargs: Dict[str, Any]
 
 
 @dataclass
 class _PreparedArgument:
     quantizer_key: Optional[str]
     parameter_owner: Optional[Tuple[nn.Module, str]] = None
-    expert_weight: bool = False
 
 
 @dataclass
@@ -187,10 +197,16 @@ class FunctionalQuantState:
     :meth:`cleanup` or :func:`remove_functional_quantization` to remove them.
     """
 
-    def __init__(self, model: nn.Module, quant_map: Dict[Callable, QuantSpecType]) -> None:
+    def __init__(
+        self,
+        model: nn.Module,
+        quant_map: Dict[Callable, QuantSpecType],
+        weight_descriptors: Tuple[FunctionalWeightDescriptor, ...] = ()
+    ) -> None:
         """Attach the retained quantizer container and initialize prepared state."""
         self.model = model
         self.quant_map = quant_map
+        self.weight_descriptors = weight_descriptors
         self.specs = _parse_quant_map(quant_map)
         self.function_indices = {func: index for index, func in enumerate(self.specs)}
         self.arg_quant_map = {
@@ -201,7 +217,6 @@ class FunctionalQuantState:
             specs in self.specs.items()}
         self.calls: Dict[Tuple[str, Callable, int], _PreparedCall] = {}
         self.parameter_owners: Dict[int, Tuple[nn.Module, str]] = {}
-        self.parameter_stacks: Dict[Tuple[str, int], Tuple[nn.Parameter, Tuple[nn.Module, str]]] = {}
         self.aliased_parameters = set()
         self.registered_parametrizations: List[Tuple[nn.Module, str]] = []
         self.enabled = False
@@ -237,7 +252,6 @@ class FunctionalQuantState:
         if getattr(self.model, _STATE_NAME, None) is self:
             delattr(self.model, _STATE_NAME)
         self.calls.clear()
-        self.parameter_stacks.clear()
         self._closed = True
 
     def _assert_open(self) -> None:
@@ -280,19 +294,18 @@ class _HookedMode(TorchFunctionMode):
         self.counters.clear()
 
     def _pre_hook(self, name: str) -> Callable:
-
         """Create a pre-hook that records entry into a named module."""
+
         def hook(module: nn.Module, args: Tuple[Any, ...]) -> None:
-            """Perform this functional quantization operation."""
             self.module_stack.append((name, module))
+            self._on_module_enter(name, module)
 
         return hook
 
     def _post_hook(self, name: str) -> Callable:
-
         """Create an always-call hook that removes a completed module entry."""
+
         def hook(module: nn.Module, args: Tuple[Any, ...], output: Any) -> None:
-            """Perform this functional quantization operation."""
             if self.module_stack and self.module_stack[-1][0] == name:
                 self.module_stack.pop()
 
@@ -303,10 +316,13 @@ class _HookedMode(TorchFunctionMode):
         self.module_stack.clear()
         self.counters.clear()
 
+    def _on_module_enter(self, name: str, module: nn.Module) -> None:
+        """Allow subclasses to prepare module-local quantization state."""
+        pass
+
     def _build_parameter_owners(self) -> None:
         """Map each direct model parameter to its owning module attribute."""
         self.state.parameter_owners.clear()
-        self.state.parameter_stacks.clear()
         for _, module in self.model.named_modules():
             if module in set(self.state.quantizers.modules()):
                 continue
@@ -314,49 +330,6 @@ class _HookedMode(TorchFunctionMode):
                 if id(parameter) in self.state.parameter_owners:
                     self.state.aliased_parameters.add(id(parameter))
                 self.state.parameter_owners[id(parameter)] = (module, name)
-                storage_key = (str(parameter.device), parameter.untyped_storage().data_ptr())
-                self.state.parameter_stacks[storage_key] = (parameter, (module, name))
-
-    def _expert_weight_view(
-            self, value: Tensor) -> Optional[Tuple[nn.Parameter, Tuple[nn.Module, str], int]]:
-        """Return the stacked owner and selected expert for a leading-dimension view."""
-        storage_key = (str(value.device), value.untyped_storage().data_ptr())
-        stack = self.state.parameter_stacks.get(storage_key)
-        if stack is None:
-            # Accelerate/offload hooks can materialize a parameter on a new
-            # device after preparation. Refresh the storage lookup lazily.
-            for owner in self.state.parameter_owners.values():
-                parameter = getattr(owner[0], owner[1])
-                if not isinstance(parameter, nn.Parameter):
-                    continue
-                parameter_key = (str(parameter.device), parameter.untyped_storage().data_ptr())
-                self.state.parameter_stacks[parameter_key] = (parameter, owner)
-                if parameter_key == storage_key:
-                    stack = parameter, owner
-                    break
-        if stack is None:
-            return None
-        parameter, owner = stack
-        if parameter.dim() != value.dim() + 1 or tuple(parameter.shape[1:]) != tuple(value.shape):
-            return None
-        if tuple(parameter.stride()[1:]) != tuple(value.stride()):
-            return None
-        offset = value.storage_offset() - parameter.storage_offset()
-        expert_stride = parameter.stride(0)
-        if expert_stride == 0 or offset % expert_stride:
-            return None
-        expert_index = offset // expert_stride
-        if not 0 <= expert_index < parameter.shape[0]:
-            return None
-        return parameter, owner, expert_index
-
-    def _quantized_expert_view(
-            self, proxy: nn.Module, parameter: nn.Parameter, expert_index: int) -> QuantTensor:
-        """Quantize a stacked expert parameter and select one expert with metadata."""
-        quantized_stack = proxy(parameter)
-        if not isinstance(quantized_stack, QuantTensor):
-            raise RuntimeError('Expert weight quantization must return a QuantTensor.')
-        return quantized_stack[expert_index]
 
     def _spec_for(self, func: Callable, arg_idx: int, num_args: int, is_parameter: bool) -> Any:
         """Select the effective specification for an argument at a call site."""
@@ -389,6 +362,7 @@ class _HookedMode(TorchFunctionMode):
             self, quant_class: Type, di_kwargs: Dict[str, Any], value: nn.Parameter) -> nn.Module:
         # Per-channel/groupwise operations must override this explicitly. A scalar
         # weight quantizer keeps the standard linear-layout default.
+
         """Create a weight proxy using explicit functional-operation metadata."""
         output_channel_dim = di_kwargs.get('output_channel_dim', 0)
         holder = _WeightQuantHolder(value, output_channel_dim)
@@ -397,6 +371,29 @@ class _HookedMode(TorchFunctionMode):
 
 
 class _FunctionalQuantBuilder(_HookedMode):
+
+    def _on_module_enter(self, name: str, module: nn.Module) -> None:
+        """Parametrize declared stacked expert weights before expert indexing."""
+        for descriptor_index, descriptor in enumerate(self.state.weight_descriptors):
+            if not descriptor.module_matcher(module):
+                continue
+            for parameter_name in descriptor.parameter_names:
+                parameter = getattr(module, parameter_name, None)
+                if parameter is None:
+                    raise RuntimeError(
+                        f"MoE descriptor expected parameter '{parameter_name}' in module '{name}'.")
+                if is_parametrized(module, parameter_name):
+                    continue
+                if not isinstance(parameter, nn.Parameter):
+                    raise RuntimeError(
+                        f"MoE descriptor parameter '{parameter_name}' in module '{name}' is not a Parameter."
+                    )
+                key = f'_fq_{name.replace(".", "__") or "root"}_expert_{descriptor_index}_{parameter_name}_wq'
+                proxy = self._create_weight(descriptor.quantizer, descriptor.di_kwargs, parameter)
+                self._add_quantizer(key, proxy)
+                register_parametrization(
+                    module, parameter_name, _QuantParametrization(self.state, proxy))
+                self.state.registered_parametrizations.append((module, parameter_name))
 
     def build(
             self, example_inputs: Optional[Tuple[Any, ...]],
@@ -432,32 +429,20 @@ class _FunctionalQuantBuilder(_HookedMode):
             if not isinstance(value, Tensor) or isinstance(value, QuantTensor):
                 continue
             owner = self.state.parameter_owners.get(id(value))
-            expert_view = None if owner is not None else self._expert_weight_view(value)
             if owner is not None and id(value) in self.state.aliased_parameters:
                 raise RuntimeError(
                     'Functional weight quantization does not support tied parameters.')
-            spec = self._spec_for(func, arg_idx, len(slots), owner is not None or expert_view is not None)
+            spec = self._spec_for(func, arg_idx, len(slots), owner is not None)
             quant_class, di_kwargs = _resolve_spec(spec, module, name, index)
             if quant_class is None:
                 continue
             key = _module_key(
-                name,
-                func,
-                self.state.function_indices[func],
-                index,
-                arg_idx,
-                owner is not None or expert_view is not None)
-            if owner is None and expert_view is None:
+                name, func, self.state.function_indices[func], index, arg_idx, owner is not None)
+            if owner is None:
                 quantizer = self._create_activation(quant_class, di_kwargs, value)
                 self._add_quantizer(key, quantizer)
                 call.arguments[arg_idx] = _PreparedArgument(key)
                 replace(quantizer(value))
-            elif expert_view is not None:
-                parameter, parameter_owner, expert_index = expert_view
-                proxy = self._create_weight(quant_class, di_kwargs, parameter)
-                self._add_quantizer(key, proxy)
-                call.arguments[arg_idx] = _PreparedArgument(key, parameter_owner, expert_weight=True)
-                replace(self._quantized_expert_view(proxy, parameter, expert_index))
             else:
                 if is_parametrized(owner[0], owner[1]):
                     raise RuntimeError(
@@ -524,18 +509,9 @@ class functional_quantization_mode(_HookedMode):
             prepared = call.arguments.get(arg_idx)
             if prepared is None or isinstance(value, QuantTensor) or not isinstance(value, Tensor):
                 continue
-            if prepared.parameter_owner is not None and not prepared.expert_weight:
+            if prepared.parameter_owner is not None:
                 continue
-            if prepared.expert_weight:
-                expert_view = self._expert_weight_view(value)
-                if expert_view is None:
-                    raise RuntimeError('Prepared expert weight no longer refers to a stacked parameter.')
-                parameter, _, expert_index = expert_view
-                replace(
-                    self._quantized_expert_view(
-                        self.state.quantizers[prepared.quantizer_key], parameter, expert_index))
-            else:
-                replace(self.state.quantizers[prepared.quantizer_key](value))
+            replace(self.state.quantizers[prepared.quantizer_key](value))
         return func(*tuple(values), **kwargs)
 
     def checkpoint_context_fn(self) -> Callable[[], Tuple[Any, Any]]:
@@ -566,15 +542,17 @@ class _FunctionalQuantInterceptor(TorchFunctionMode):
 
 
 def prepare_functional_quantization(
-        model: nn.Module,
-        quant_map: Dict[Callable, QuantSpecType],
-        example_inputs: Optional[Tuple[Any, ...]] = None,
-        example_kwargs: Optional[Dict[str, Any]] = None) -> FunctionalQuantState:
+    model: nn.Module,
+    quant_map: Dict[Callable, QuantSpecType],
+    example_inputs: Optional[Tuple[Any, ...]] = None,
+    example_kwargs: Optional[Dict[str, Any]] = None,
+    weight_descriptors: Tuple[FunctionalWeightDescriptor, ...] = ()
+) -> FunctionalQuantState:
     """Discover functional call sites and instantiate their quantizers."""
     if example_inputs is None and example_kwargs is None:
         raise ValueError(
             'prepare_functional_quantization requires example_inputs and/or example_kwargs.')
-    state = FunctionalQuantState(model, quant_map)
+    state = FunctionalQuantState(model, quant_map, weight_descriptors)
     return _FunctionalQuantBuilder(state).build(example_inputs, example_kwargs)
 
 

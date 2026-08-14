@@ -23,6 +23,7 @@ from brevitas.graph.fixed_point import MoveSplitBatchNormBeforeCat
 from brevitas.graph.functional_quant import _QuantParametrization
 from brevitas.graph.functional_quant import functional_quantization_mode
 from brevitas.graph.functional_quant import FunctionalQuantState
+from brevitas.graph.functional_quant import FunctionalWeightDescriptor
 from brevitas.graph.functional_quant import prepare_functional_quantization
 from brevitas.graph.functional_quant import remove_functional_quantization
 from brevitas.graph.quantize_impl import act_handler

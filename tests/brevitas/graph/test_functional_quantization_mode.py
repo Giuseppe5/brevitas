@@ -11,6 +11,7 @@ from torch.utils.checkpoint import checkpoint
 
 from brevitas.graph.quantize import _QuantParametrization
 from brevitas.graph.quantize import functional_quantization_mode
+from brevitas.graph.quantize import FunctionalWeightDescriptor
 from brevitas.graph.quantize import prepare_functional_quantization
 from brevitas.graph.quantize import remove_functional_quantization
 from brevitas.nn import QuantIdentity
@@ -284,35 +285,45 @@ class TestFunctionalQuantizationMode:
         """A Qwen expert slice reuses one full-stack weight quantizer."""
         model = QwenMoeExpertModel()
         x = torch.randn(2, 4)
-        quant_map = {
-            F.linear: (
-                Int8ActPerTensorFloat,
-                (Int8WeightPerTensorFloat, {'output_channel_dim': 1, 'group_dim': 2}))}
+        quant_map = {F.linear: Int8ActPerTensorFloat}
+        descriptor = FunctionalWeightDescriptor(
+            module_matcher=lambda module: isinstance(module, QwenMoeExpertModel),
+            parameter_names=('expert_weight',),
+            quantizer=Int8WeightPerTensorFloat.let(output_channel_dim=1, group_dim=2),
+            di_kwargs={})
 
-        state = prepare_functional_quantization(model, quant_map, example_inputs=(x, 0))
-        assert not is_parametrized(model, 'expert_weight')
+        state = prepare_functional_quantization(
+            model, quant_map, example_inputs=(x, 0), weight_descriptors=(descriptor,))
+        assert is_parametrized(model, 'expert_weight')
         assert len([key for key in state.quantizers if key.endswith('_wq')]) == 1
         with functional_quantization_mode(state):
+            assert isinstance(model.expert_weight, IntQuantTensor)
             out = model(x, 1)
         assert out.shape == (2, 6)
         state.cleanup()
+        assert not is_parametrized(model, 'expert_weight')
 
     def test_gpt_oss_expert_weight_view_is_quantized_as_a_stack(self):
         """A GPT-OSS expert slice uses the explicit matmul stack layout."""
         model = GptOssExpertModel()
         x = torch.randn(2, 4)
-        quant_map = {
-            torch.matmul: (
-                None,
-                (Int8WeightPerTensorFloat, {'output_channel_dim': 2, 'group_dim': 1}))}
+        quant_map = {torch.Tensor.__matmul__: (None, None)}
+        descriptor = FunctionalWeightDescriptor(
+            module_matcher=lambda module: isinstance(module, GptOssExpertModel),
+            parameter_names=('expert_weight',),
+            quantizer=Int8WeightPerTensorFloat.let(output_channel_dim=2, group_dim=1),
+            di_kwargs={})
 
-        state = prepare_functional_quantization(model, quant_map, example_inputs=(x, 0))
-        assert not is_parametrized(model, 'expert_weight')
+        state = prepare_functional_quantization(
+            model, quant_map, example_inputs=(x, 0), weight_descriptors=(descriptor,))
+        assert is_parametrized(model, 'expert_weight')
         assert len([key for key in state.quantizers if key.endswith('_wq')]) == 1
         with functional_quantization_mode(state):
+            assert isinstance(model.expert_weight, IntQuantTensor)
             out = model(x, 1)
         assert out.shape == (2, 6)
         state.cleanup()
+        assert not is_parametrized(model, 'expert_weight')
 
     def test_missing_second_runtime_spec_reuses_first_quantizer(self):
         """A single spec quantizes both runtime inputs of a binary function."""
