@@ -20,6 +20,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from brevitas.core.function_wrapper.learned_round import LearnedRoundSte
+from brevitas.graph.functional_quant import FunctionalQuantState
 from brevitas.inject.enum import FloatToIntImplType
 from brevitas.inject.enum import LearnedRoundImplType
 from brevitas.nn.quant_layer import QuantWeightBiasInputOutputLayer as QuantWBIOL
@@ -75,7 +76,10 @@ LEARNED_ROUND_INIT_FN_REGISTRY = Registry[LearnedRoundInitFn]('LearnedRoundInitF
 
 
 def insert_learned_round_quantizers(
-        model: nn.Module, learned_round_param: LearnedRoundImplType, **kwargs) -> None:
+        model: nn.Module,
+        learned_round_param: LearnedRoundImplType,
+        functional_state: Optional[FunctionalQuantState] = None,
+        **kwargs) -> None:
     for module in model.modules():
         if isinstance(module, QuantWBIOL) and len([
                 m for m in module.modules() if isinstance(m, LearnedRoundSte)]) == 0:
@@ -88,6 +92,28 @@ def insert_learned_round_quantizers(
                 **kwargs,
             )
             module.weight_quant.init_tensor_quant(preserve_state_dict=True)
+    if functional_state is not None:
+        for owner in functional_state.owners.values():
+            proxy = owner.proxy
+            if any(isinstance(module, LearnedRoundSte) for module in proxy.modules()):
+                continue
+            quantized_weight = proxy(owner.original_parameter)
+            scale = quantized_weight.scale
+            if learned_round_param in (LearnedRoundImplType.HARD_SIGMOID,
+                                       LearnedRoundImplType.SIGMOID):
+                floor_weight = torch.floor(owner.original_parameter.data / scale)
+                delta = owner.original_parameter.data / scale - floor_weight
+                value = -torch.log((kwargs.get('learned_round_zeta', 1.1) - kwargs.get(
+                    'learned_round_gamma', -0.1)) /
+                                   (delta - kwargs.get('learned_round_gamma', -0.1)) - 1)
+            else:
+                value = torch.zeros_like(owner.original_parameter.data)
+            proxy.quant_injector = proxy.quant_injector.let(
+                float_to_int_impl_type=FloatToIntImplType.LEARNED_ROUND,
+                learned_round_impl_type=learned_round_param,
+                learned_round_init=value,
+                **kwargs)
+            proxy.init_tensor_quant(preserve_state_dict=True)
 
 
 def return_learned_round_quantizers(block: nn.Module) -> List[nn.Module]:
@@ -253,5 +279,6 @@ class LearnedRoundTrainer(TrainingHandler[LearnedRoundArgs]):
         insert_learned_round_quantizers(
             model=model,
             learned_round_param=self.config.learned_round_param,
-            **self.config.learned_round_kwargs,
+            functional_state=getattr(model, '_functional_quantization_state', None),
+            **(self.config.learned_round_kwargs or {}),
         )
