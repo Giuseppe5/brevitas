@@ -65,8 +65,25 @@ class WeightFloatQuantProxyFromInjectorBase(WeightQuantProxyFromInjectorBase, AB
         return is_ocp_e4m3
 
     @property
+    def is_ocp_e3m2(self):
+        is_e3m2 = self.mantissa_bit_width() == 2 and self.exponent_bit_width() == 3
+        return is_e3m2 and self.inf_values() is None and self.nan_values() is None
+
+    @property
+    def is_ocp_e2m3(self):
+        is_e2m3 = self.mantissa_bit_width() == 3 and self.exponent_bit_width() == 2
+        return is_e2m3 and self.inf_values() is None and self.nan_values() is None
+
+    @property
+    def is_ocp_e2m1(self):
+        is_e2m1 = self.mantissa_bit_width() == 1 and self.exponent_bit_width() == 2
+        return is_e2m1 and self.inf_values() is None and self.nan_values() is None
+
+    @property
     def is_ocp(self):
-        return self.is_ocp_e4m3 or self.is_ocp_e5m2
+        return (
+            self.is_ocp_e4m3 or self.is_ocp_e5m2 or self.is_ocp_e3m2 or self.is_ocp_e2m3 or
+            self.is_ocp_e2m1)
 
     @property
     def is_fnuz_e5m2(self):
