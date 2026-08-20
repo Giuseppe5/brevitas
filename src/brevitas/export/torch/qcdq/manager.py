@@ -18,8 +18,8 @@ from brevitas.proxy.quant_proxy import QuantProxyProtocol
 
 from .export_handler import TorchExportFloatQCDQActQuantProxyHandler
 from .export_handler import TorchExportFloatQCDQWeightQuantProxyHandler
-from .export_handler import TorchExportMXFP4ActQuantProxyHandler
-from .export_handler import TorchExportMXFP4WeightQuantProxyHandler
+from .export_handler import TorchExportMXFloatActQuantProxyHandler
+from .export_handler import TorchExportMXFloatWeightQuantProxyHandler
 from .export_handler import TorchExportQCDQActQuantProxyHandler
 from .export_handler import TorchExportQCDQWeightQuantProxyHandler
 from .handler import TorchCDQCastBiasQuantProxyHandler
@@ -67,7 +67,7 @@ class TorchQCDQManager(BaseManager):
     def change_weight_export(cls, export_weight_q_node: bool = False):
         for handler in cls.handlers:
             if hasattr(handler, '_export_q_node'):
-                handler._export_weight_q_node = export_weight_q_node
+                handler._export_q_node = export_weight_q_node
 
     @classmethod
     def export(
@@ -86,8 +86,8 @@ class TorchQCDQExportManager(BaseManager):
     target_name = 'torch_export'
 
     handlers = [
-        TorchExportMXFP4WeightQuantProxyHandler,
-        TorchExportMXFP4ActQuantProxyHandler,
+        TorchExportMXFloatWeightQuantProxyHandler,
+        TorchExportMXFloatActQuantProxyHandler,
         TorchExportFloatQCDQWeightQuantProxyHandler,
         TorchExportFloatQCDQActQuantProxyHandler,
         TorchExportQCDQWeightQuantProxyHandler,
