@@ -1,8 +1,6 @@
 # Copyright (C) 2024, Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import inspect
-
 import torch
 import torch.nn.functional as F
 from transformers.integrations.executorch import TorchExportableModuleForDecoderOnlyLM
@@ -65,59 +63,29 @@ class make_dynamo_compatible:
     def __init__(self, model):
         self.model = model
         self.model_config = model.config
-        self.text_config = (
-            model.config.get_text_config()
-            if hasattr(model.config, 'get_text_config') else model.config)
-        self.model_use_cache = getattr(self.text_config, 'use_cache', None)
-        self.generation_config = model.generation_config
-        self.model_cache_implementation = getattr(
-            self.generation_config, 'cache_implementation', None)
-        self.model_generation_use_cache = getattr(self.generation_config, 'use_cache', None)
-
-    def _restore_cache_config(self):
-        self.text_config.use_cache = self.model_use_cache
-        self.generation_config.cache_implementation = self.model_cache_implementation
-        self.generation_config.use_cache = self.model_generation_use_cache
+        if hasattr(self.model.generation_config, 'cache_implementation'):
+            self.model_cache_implementation = self.model.generation_config.cache_implementation
+        else:
+            self.model_cache_implementation = None
+        self.model_generation_use_cache = getattr(self.model.generation_config, 'use_cache', None)
 
     def __enter__(self):
-        # The ExecuTorch wrapper requires caching while it patches the model. Caching is
-        # disabled again on the unwrapped model before Dynamo tracing.
-        self.text_config.use_cache = True
-        self.generation_config.cache_implementation = "static"
-        self.generation_config.use_cache = True
+        # We set cache_implementation to `static` for compatibility with dynamo
+        self.model.generation_config.cache_implementation = "static"
+        # transformers 5.x asserts use_cache=True before constructing
+        # TorchExportableModuleForDecoderOnlyLM; disable it on the unwrapped model.
+        self.model.generation_config.use_cache = True
         # Because getattr does not fall back to default with `config` class, we need to manually fill
         # `head_dim` if it is None
         # https://github.com/huggingface/transformers/blob/47b0e478f324b54f177ea7998a0791870fdd0324/src/transformers/integrations/executorch.py#L538
         if not hasattr(self.model.config, 'head_dim') or self.model.config.head_dim is None:
             self.model.config.head_dim = self.model.config.hidden_size // self.model.config.num_attention_heads
-        parameters = inspect.signature(TorchExportableModuleForDecoderOnlyLM.__init__).parameters
-        has_batch_size = 'batch_size' in parameters
-        has_max_batch_size = 'max_batch_size' in parameters
-        if has_batch_size and has_max_batch_size:
-            self._restore_cache_config()
-            raise RuntimeError(
-                "Unsupported Transformers ExecuTorch API: expected exactly one of "
-                "'batch_size' or 'max_batch_size'.")
-
-        wrapper_kwargs = {'max_cache_len': 1}
-        if has_batch_size:
-            wrapper_kwargs['batch_size'] = 1
-        elif has_max_batch_size:
-            wrapper_kwargs['max_batch_size'] = 1
-        else:
-            self._restore_cache_config()
-            raise RuntimeError(
-                "Unsupported Transformers ExecuTorch API: missing both 'batch_size' "
-                "and 'max_batch_size'.")
-
-        # Wrapping applies the Dynamo compatibility patches; the cache itself is not
-        # used after the model is immediately unwrapped.
-        try:
-            self.model = TorchExportableModuleForDecoderOnlyLM(
-                self.model, **wrapper_kwargs).model.model
-        except Exception:
-            self._restore_cache_config()
-            raise
+        # Wrapping the model applies certain patches to make it work with dynamo,
+        # but then we can unwrap it immediately.
+        # We need to specify batch_size and max_cache_len. The latter is not important since we disable
+        # cache anyway while we trace the model.
+        self.model = TorchExportableModuleForDecoderOnlyLM(
+            self.model, batch_size=1, max_cache_len=1).model.model
         # Caching should be disabled to make it work with dynamo
         # The other alternative is to use static_cache
         self.model.config.use_cache = False
@@ -128,4 +96,5 @@ class make_dynamo_compatible:
         # so guarding on `is not None` would leak "static" into downstream generation
         # (which then triggers torch.compile + StaticCache recompiles in lighteval).
         self.model.config = self.model_config
-        self._restore_cache_config()
+        self.model.generation_config.cache_implementation = self.model_cache_implementation
+        self.model.generation_config.use_cache = self.model_generation_use_cache

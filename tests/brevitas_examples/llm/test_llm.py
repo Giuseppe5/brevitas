@@ -27,6 +27,7 @@ from brevitas import config
 from brevitas import torch_version
 from brevitas.graph.equalize import _compute_rotations
 from brevitas.graph.equalize import Region
+from brevitas.nn.equalized_layer import RotatedModule
 from brevitas.utils.python_utils import Registry
 from brevitas_examples.common.generative.quantizers import BaseQuantizer
 from brevitas_examples.common.generative.quantizers import QUANTIZERS_REGISTRY
@@ -541,6 +542,32 @@ def test_small_models_rotation_optimization_layer_count(caplog, args_layer_count
     with patch('brevitas_examples.llm.main.fuse_parametrizations', lambda model: model):
         _, model = main(args, extra_args)
     assert_layer_types_count(model, exp_metrics["exp_layer_types_count"])
+
+
+@pytest.mark.llm
+def test_fused_rotation_with_unset_generation_cache(default_run_args, main):
+    args = default_run_args
+    args.model = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+    args.no_quantize = True
+    args.rotation = "fused_no_fx"
+    args.replace_rmsnorm = True
+    args.rotation_orphan_sink = True
+    args.act_calibration = False
+    args.eval = False
+
+    from_pretrained = transformers.AutoModelForCausalLM.from_pretrained
+
+    def load_model(*model_args, **model_kwargs):
+        model = from_pretrained(*model_args, **model_kwargs)
+        model.generation_config.use_cache = None
+        return model
+
+    with patch('brevitas_examples.llm.main.AutoModelForCausalLM.from_pretrained',
+               side_effect=load_model):
+        _, model = main(args)
+
+    assert model.generation_config.use_cache is None
+    assert any(isinstance(module, RotatedModule) for module in model.modules())
 
 
 @pytest.mark.llm
