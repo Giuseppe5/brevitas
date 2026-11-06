@@ -13,21 +13,27 @@ Holds the two pieces every solver family reuses:
     base class, where a family binds its sweeps and gets the layer/group
     dispatch the updaters need.
 
-This module depends only on torch and the registry primitive; the concrete
-solver modules (`piso`, `chunked_piso`) import from here, never the other way
-around.
+This module depends only on torch, the registry primitive and the quantizer
+accessors in grid_optimization.utils; the concrete solver modules (`piso`,
+`chunked_piso`) import from here, never the other way around.
 
 Reference: "Optimal Post-Training Quantization Scales and Where to Find Them"
 (https://arxiv.org/abs/2606.10890).
 """
 
 from abc import ABC
+from dataclasses import dataclass
 from typing import Callable
 from typing import Optional
 from typing import Tuple
 
 import torch
+import torch.nn as nn
 
+from brevitas.graph.grid_optimization.utils import _get_scale_quant
+from brevitas.graph.grid_optimization.utils import _has_zero_zero_point
+from brevitas.graph.grid_optimization.utils import _is_float_weight_quant
+from brevitas.graph.grid_optimization.utils import _is_int_weight_quant
 from brevitas.utils.python_utils import Registry
 
 # -----------------------------------------------------------------------------
@@ -167,6 +173,32 @@ def _piso_select_optimal_straddle(
 SCALE_SOLVER_REGISTRY = Registry("SCALE_SOLVER_REGISTRY")
 
 
+@dataclass
+class ScaleSolution:
+    """What a solver returns for a batch of output channels, when a scale is not enough.
+
+    A solver may return the scale tensor alone; GridOptimizer then reads it as a
+    ScaleSolution with no offset.
+
+    - scale: the unscaled-grid step, as the plain tensor a solver returns;
+    - offset: in weight units, i.e. the weight is reconstructed as
+      q * scale + offset, which the quantizer stores as its zero-point. None
+      for a symmetric fit;
+    - scale_step / offset_step: for a layer whose scales (offsets) are quantized
+      in turn on a nested grid (see utils.NestedGrid), the step each run of
+      groups shares, one per row and run. Every scale (offset) is then that
+      step times an integer, which is how it is written into the quantizer.
+      None otherwise.
+
+    Every tensor has the output channels as its first dimension, so the batches
+    of a layer concatenate along dim 0.
+    """
+    scale: torch.Tensor
+    offset: Optional[torch.Tensor] = None
+    scale_step: Optional[torch.Tensor] = None
+    offset_step: Optional[torch.Tensor] = None
+
+
 class ScaleSolverFamily(ABC):
     """A named set of scale-optimization sweeps + their layer/group dispatch.
 
@@ -181,7 +213,31 @@ class ScaleSolverFamily(ABC):
     ('dense'|'diag'|'greedy') and tag ('group-dense'|'group-diag'|
     'group-greedy') tell the caller which H/G kwargs to build. Pure dispatch:
     no tensors are touched.
+
+    check_layer says whether the family can optimize a given layer's quantizer.
     """
+
+    @classmethod
+    def check_layer(cls, layer: nn.Module) -> Optional[str]:
+        """Return why the family cannot optimize layer, or None if it can.
+
+        Default, the requirements of a symmetric scale-only solver such as PiSO:
+        a signed quantizer, int with a zero zero-point or float, whose scale is
+        stored directly rather than quantized in turn on a grid of its own.
+        """
+        weight_quant = layer.weight_quant
+        if _get_scale_quant(layer) is not None:
+            return (
+                "the layer quantizes its scales on a grid of their own, which this solver "
+                "ignores")
+        if not weight_quant.is_signed:
+            return "a signed weight quantizer is required"
+        if _is_float_weight_quant(weight_quant):
+            return None
+        if _is_int_weight_quant(weight_quant):
+            return None if _has_zero_zero_point(layer) else (
+                "int weight quantizer must have a zero zero-point")
+        return "only int and float weight quantizers are supported"
 
     # -- solver slots ---------------------------------------------------------
 

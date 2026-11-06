@@ -13,6 +13,7 @@ from tqdm import tqdm
 from brevitas.graph.calibrate import calibration_mode
 from brevitas.graph.calibrate import quantization_status_manager
 from brevitas.graph.grid_optimization import grid_optimization_mode
+from brevitas_examples.llm.gguf_export.search import GGUF_SOLVERS
 from brevitas_examples.llm.llm_quant.gpxq import _block_optimization
 from brevitas_examples.llm.llm_quant.gpxq import _calibrate_model
 
@@ -83,6 +84,20 @@ def _pass_managers(model: nn.Module, objective: str,
     return [quant_pass, float_pass]
 
 
+def _solver_kwargs(args: Namespace) -> dict:
+    """Options of the solver itself, the same for every layer. Only the GGUF solvers
+    take any."""
+    if args.grid_opt_solver not in GGUF_SOLVERS:
+        return {}
+    return {
+        'magnitude': args.grid_opt_magnitude,
+        'magnitude_factor': args.grid_opt_magnitude_factor,
+        'magnitude_scope': args.grid_opt_magnitude_scope,
+        'sweep_steps': args.grid_opt_sweep_steps,
+        'sweep_step': args.grid_opt_sweep_step,
+        'scale_placement': args.grid_opt_scale_placement,}
+
+
 @torch.no_grad()
 def apply_grid_optimization(
         model: nn.Module, dataloader: torch.utils.data.DataLoader, args: Namespace) -> None:
@@ -106,7 +121,8 @@ def apply_grid_optimization(
         'per_group_greedy': args.grid_opt_group_sequential,
         'per_group_greedy_reorder': args.grid_opt_group_sequential_act_order,
         'covariance_mode': args.grid_opt_covariance_mode,
-        'solver': args.grid_opt_solver,}
+        'solver': args.grid_opt_solver,
+        'solver_kwargs': _solver_kwargs(args),}
 
     if args.gpxq_block_name is not None:
         _block_optimization(

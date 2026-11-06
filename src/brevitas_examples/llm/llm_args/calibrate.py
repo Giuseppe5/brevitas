@@ -12,6 +12,10 @@ from brevitas_examples.common.parse_utils import AlgorithmArgumentParser
 GRID_OPT_PREFIX = "grid-opt"
 # Reconstruction objectives of --grid-optimization, see apply_grid_optimization.
 GRID_OPT_OBJECTIVES = ['unquantized', 'self-activation', 'cross-activation']
+# The solvers grid optimization itself provides. Other scale-selection methods join
+# the same flag by passing their names to ``add_arguments``; the entry point owns
+# the full list, since this module cannot know what else is installed.
+PISO_SOLVERS = ['piso', 'chunked-piso']
 
 
 class GridOptimizationArgumentParser(AlgorithmArgumentParser):
@@ -20,7 +24,17 @@ class GridOptimizationArgumentParser(AlgorithmArgumentParser):
     prefix = GRID_OPT_PREFIX
 
     @staticmethod
-    def add_arguments(parser: ArgumentParser, prefix: str = GRID_OPT_PREFIX) -> None:
+    def add_arguments(
+            parser: ArgumentParser,
+            prefix: str = GRID_OPT_PREFIX,
+            extra_solvers: Optional[List[str]] = None) -> None:
+        """Add the grid optimization flags.
+
+        `extra_solvers` names solvers supplied elsewhere that share the solver flag.
+        They are offered as choices here; dispatching to them, and validating
+        whatever options they need, belongs to whoever supplies them.
+        """
+        solvers = PISO_SOLVERS + list(extra_solvers or [])
 
         GridOptimizationArgumentParser._add(
             parser,
@@ -28,7 +42,7 @@ class GridOptimizationArgumentParser(AlgorithmArgumentParser):
             'solver',
             type=str,
             default='piso',
-            choices=['piso', 'chunked-piso'],
+            choices=solvers,
             help='Solver that optimizes the scale. piso is PiSO (Piecewise Scale '
             'Optimization); chunked-piso is a faster per-channel variant that only supports '
             'positive scales (symmetric grids). Default: piso')

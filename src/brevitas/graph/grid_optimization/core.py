@@ -30,7 +30,9 @@ brevitas_examples.llm.llm_quant.calibrate.
 
 from functools import partial
 from types import SimpleNamespace
+from typing import Any
 from typing import Callable
+from typing import Dict
 from typing import Optional
 from typing import Tuple
 import warnings
@@ -41,14 +43,17 @@ import torch.nn as nn
 from brevitas.graph.gpxq import accumulate_covariance
 from brevitas.graph.gpxq import ModuleOptimizer
 from brevitas.graph.grid_optimization.solvers import SCALE_SOLVER_REGISTRY
+from brevitas.graph.grid_optimization.solvers import ScaleSolution
 from brevitas.graph.grid_optimization.utils import _build_grid
 from brevitas.graph.grid_optimization.utils import _get_base_scale
+from brevitas.graph.grid_optimization.utils import _get_scale_quant_grid
+from brevitas.graph.grid_optimization.utils import _get_zero_point_quant_grid
 from brevitas.graph.grid_optimization.utils import _grid_threshold
 from brevitas.graph.grid_optimization.utils import _has_base_scale
-from brevitas.graph.grid_optimization.utils import _has_zero_zero_point
-from brevitas.graph.grid_optimization.utils import _is_float_weight_quant
-from brevitas.graph.grid_optimization.utils import _is_int_weight_quant
 from brevitas.graph.grid_optimization.utils import _set_base_scale
+from brevitas.graph.grid_optimization.utils import _set_base_zero_point
+from brevitas.graph.grid_optimization.utils import _set_nested_scale
+from brevitas.graph.grid_optimization.utils import _set_nested_zero_point
 from brevitas.graph.grid_optimization.utils import compute_group_importance_permutation
 from brevitas.graph.layerwise_hook import layerwise_hook_mode
 from brevitas.graph.utils import is_quant_module
@@ -69,7 +74,8 @@ class GridOptimizer:
     (H = X_tilde^T X_tilde, G = X_tilde^T X), 2-D and in the layer's natural column
     order; G=None selects the self-activation objective (the solvers then use H in place
     of G). The solver family is selected by name from SCALE_SOLVER_REGISTRY (default
-    'piso', see .solvers).
+    'piso', see .solvers), and solver_kwargs are passed on to every call of its solver
+    (the PiSO solvers take none).
 
     Built for a single layer, which must satisfy is_layer_valid. Its subclasses decide
     where the covariance matrices come from and when the scales are optimized:
@@ -87,7 +93,8 @@ class GridOptimizer:
             per_group_greedy: bool = False,
             per_group_greedy_reorder: bool = True,
             covariance_mode: str = 'dense',
-            solver: str = 'piso') -> None:
+            solver: str = 'piso',
+            solver_kwargs: Optional[Dict[str, Any]] = None) -> None:
         GridOptimizer.validate_config(covariance_mode, solver)
         self.layer = layer
         self.solver_dtype = solver_dtype
@@ -97,6 +104,7 @@ class GridOptimizer:
         self.per_group_greedy = per_group_greedy
         self.per_group_greedy_reorder = per_group_greedy_reorder
         self.covariance_mode = covariance_mode
+        self.solver_kwargs = dict(solver_kwargs or {})
         self._solver_family = SCALE_SOLVER_REGISTRY.get(solver)
 
     @staticmethod
@@ -113,11 +121,11 @@ class GridOptimizer:
         SCALE_SOLVER_REGISTRY.get(solver)
 
     @staticmethod
-    def is_layer_valid(layer: nn.Module) -> bool:
-        """Whether grid optimization supports layer: a signed, weight-quantized QuantLinear
-        with a parameter-from-stats scale, per-channel or per-group, int (with zero
-        zero-point) or float. Returns False (warning that the layer is skipped)
-        instead of raising on any mismatch."""
+    def is_layer_valid(layer: nn.Module, solver: str = 'piso') -> bool:
+        """Whether grid optimization with solver supports layer: a weight-quantized
+        QuantLinear with a parameter-from-stats scale, whose quantizer the solver family
+        accepts (see ScaleSolverFamily.check_layer). Returns False (warning that the
+        layer is skipped) instead of raising on any mismatch."""
         try:
             if not is_quant_module(layer):
                 warnings.warn("Skipping grid optimization: layer is not a quant module.")
@@ -134,21 +142,9 @@ class GridOptimizer:
                     "Skipping grid optimization: layer scale is not a "
                     "ParameterFromStatsFromParameterScaling.")
                 return False
-            if not layer.weight_quant.is_signed:
-                warnings.warn("Skipping grid optimization: a signed weight quantizer is required.")
-                return False
-            if _is_float_weight_quant(layer.weight_quant):
-                pass  # float weight quantizers have no zero-point requirement
-            elif _is_int_weight_quant(layer.weight_quant):
-                if not _has_zero_zero_point(layer):
-                    warnings.warn(
-                        "Skipping grid optimization: int weight quantizer must have a zero "
-                        "zero-point.")
-                    return False
-            else:
-                warnings.warn(
-                    "Skipping grid optimization: only int and float weight quantizers are "
-                    "supported.")
+            reason = SCALE_SOLVER_REGISTRY.get(solver).check_layer(layer)
+            if reason is not None:
+                warnings.warn(f"Skipping grid optimization: {reason}.")
                 return False
         except Exception:
             warnings.warn("Skipping grid optimization: layer validity check raised.")
@@ -219,19 +215,41 @@ class GridOptimizer:
         # Bind the solver and its arguments into a callable that takes (W, allow_negative_s)
         compute_scale_method = self._bind_solver_matrices(solver_fn, arg_kind, grid, H, G)
 
-        optimal_s = torch.zeros_like(_get_base_scale(layer), dtype=H.dtype)
-
+        solutions = []
         with torch.inference_mode():
             for i in range(0, W.shape[0], batch_size):
                 end = i + batch_size
-                optimal_s[i:end] = compute_scale_method(
+                solution = compute_scale_method(
                     w_b=W[i:end], allow_negative_s=(signed_scale and (grid[-1] != -grid[0])))
+                if isinstance(solution, torch.Tensor):
+                    solution = ScaleSolution(scale=solution)
+                solutions.append(solution)
 
+        # Concatenated outside inference mode, so that what is written into the layer
+        # is an ordinary tensor.
+        def concat(field):
+            parts = [getattr(s, field) for s in solutions]
+            return None if parts[0] is None else torch.cat(parts)
+
+        optimal_s = concat('scale').reshape(_get_base_scale(layer).shape)
+        offset = concat('offset')
+        offset = None if offset is None else offset.reshape(optimal_s.shape)
+        scale_step, offset_step = concat('scale_step'), concat('offset_step')
         if inv_block_perm is not None:
             optimal_s = optimal_s[:, inv_block_perm]
+            offset = None if offset is None else offset[:, inv_block_perm]
 
-        # Update the s on the weight quantizer
-        _set_base_scale(layer, optimal_s * _grid_threshold(grid, weight_quant))
+        # Update the s (and zero-point) on the weight quantizer
+        threshold = _grid_threshold(grid, weight_quant)
+        if scale_step is None:
+            _set_base_scale(layer, optimal_s * threshold)
+        else:
+            _set_nested_scale(layer, optimal_s * threshold, scale_step * threshold)
+        if offset is not None:
+            if offset_step is None:
+                _set_base_zero_point(layer, offset)
+            else:
+                _set_nested_zero_point(layer, offset, offset_step)
 
     def _warn_ignored_options(self, is_group: bool, use_diag: bool) -> None:
         """Warn when per_group_greedy is set but ignored (diagonal H, or
@@ -327,7 +345,15 @@ class GridOptimizer:
         def as_diag(M):
             return None if M is None else (M.squeeze() if M.dim() > 1 else M)
 
-        bound = partial(solver_fn, unscaled_grid=grid, eps=self.tolerance)
+        bound = partial(solver_fn, unscaled_grid=grid, eps=self.tolerance, **self.solver_kwargs)
+        # Only a layer whose scales are quantized on a nested grid passes its grids, and
+        # only a family whose check_layer accepts such a layer receives them.
+        scale_quant_grid = _get_scale_quant_grid(self.layer)
+        if scale_quant_grid is not None:
+            bound = partial(
+                bound,
+                scale_quant_grid=scale_quant_grid,
+                zero_point_quant_grid=_get_zero_point_quant_grid(self.layer))
         if arg_kind == 'diag':
             return partial(bound, H_diag=as_diag(H), G_diag=as_diag(G))
         return partial(bound, H=as_dense(H), G=as_dense(G))
@@ -354,14 +380,17 @@ class InterleavedGridOptimizer(GridOptimizer):
         self._group = None
 
     @classmethod
-    def for_gpxq(cls, layer: nn.Module, **kwargs) -> Optional['InterleavedGridOptimizer']:
+    def for_gpxq(cls,
+                 layer: nn.Module,
+                 solver: str = 'piso',
+                 **kwargs) -> Optional['InterleavedGridOptimizer']:
         """Build the grid optimizer that GPTQ / Qronos hold for layer, or return None
         (warning that the layer is skipped) when grid optimization does not support it.
 
         Meant as the grid_optimizer_factory of GPxQ, with kwargs bound by partial."""
-        if not cls.is_layer_valid(layer):
+        if not cls.is_layer_valid(layer, solver):
             return None
-        return cls(layer, **kwargs)
+        return cls(layer, solver=solver, **kwargs)
 
     def resolve_blocksize(self, blocksize: int) -> int:
         """Error-correction block size: the group size for per-group layers, so that
@@ -629,12 +658,14 @@ class grid_optimization_mode(layerwise_hook_mode):
             per_group_greedy: bool = False,
             per_group_greedy_reorder: bool = True,
             covariance_mode: str = 'dense',
-            solver: str = 'piso') -> None:
+            solver: str = 'piso',
+            solver_kwargs: Optional[Dict[str, Any]] = None) -> None:
 
         # Validate attributes received as arguments before touching the model
         GridOptimizer.validate_config(covariance_mode, solver)
         self._validate_args(covariance_mode)
 
+        self.solver = solver
         self.grid_optimizer_kwargs = {
             'cross_act_objective': cross_act_objective,
             'matrix_dtype': matrix_dtype,
@@ -645,7 +676,8 @@ class grid_optimization_mode(layerwise_hook_mode):
             'per_group_greedy': per_group_greedy,
             'per_group_greedy_reorder': per_group_greedy_reorder,
             'covariance_mode': covariance_mode,
-            'solver': solver,}
+            'solver': solver,
+            'solver_kwargs': solver_kwargs,}
 
         # NOTE: layerwise_hook_mode inherits from quantization_status_manager. As in
         # gpfq_mode, leaving activation and bias quantization enabled makes the
@@ -657,7 +689,7 @@ class grid_optimization_mode(layerwise_hook_mode):
         )
 
     def _is_module_supported(self, module) -> bool:
-        return GridOptimizer.is_layer_valid(module)
+        return GridOptimizer.is_layer_valid(module, self.solver)
 
     def catch_stopfwd(self, *args, **kwargs):
         try:

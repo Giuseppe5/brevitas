@@ -27,7 +27,9 @@ usage: main.py [-h] [--config CONFIG] [--model MODEL] [--custom-quantizer CUSTOM
                [--attn-scale-type {static,dynamic,no_scale}] [--attn-quant-type {sym,asym}] [--attn-quant-granularity {per_tensor,per_row,per_group}] [--attn-group-size ATTN_GROUP_SIZE]
                [--learned-round-lr LEARNED_ROUND_LR] [--learned-round-scale-lr LEARNED_ROUND_SCALE_LR] [--learned-round-scale-momentum LEARNED_ROUND_SCALE_MOMENTUM]
                [--learned-round-iters LEARNED_ROUND_ITERS] [--learned-round-scale] [--quantize-input-zero-point] [--quantize-first-last-layer] [--magr] [--magr-alpha MAGR_ALPHA] [--qronos]
-               [--qronos-alpha QRONOS_ALPHA] [--gptq] [--gpfq] [--gpxq-act-order] [--gpxq-use-quant-activations] [--gpxq-use-grid-optimization] [--disable-create-weight-orig]
+               [--qronos-alpha QRONOS_ALPHA] [--grid-opt-magnitude {one,square,abs,sqrt_abs,rms_quad,rms_plus_abs}] [--grid-opt-magnitude-factor GRID_OPT_MAGNITUDE_FACTOR]
+               [--grid-opt-magnitude-scope {block,super_block,row}] [--grid-opt-sweep-steps GRID_OPT_SWEEP_STEPS] [--grid-opt-sweep-step GRID_OPT_SWEEP_STEP]
+               [--grid-opt-scale-placement {seed,sweep}] [--gptq] [--gpfq] [--gpxq-act-order] [--gpxq-use-quant-activations] [--gpxq-use-grid-optimization] [--disable-create-weight-orig]
                [--gpxq-max-accumulator-bit-width GPXQ_MAX_ACCUMULATOR_BIT_WIDTH] [--gpxq-max-accumulator-tile-size GPXQ_MAX_ACCUMULATOR_TILE_SIZE] [--act-calibration] [--grid-optimization] [--bias-corr] [--ln-affine-merge]
                [--convert-layernorm-to-rmsnorm] [--replace-rmsnorm] [--no-quantize] [--scaling-min-val SCALING_MIN_VAL] [--quant-sdpa {eager,functional,fx}]
                [--eager-quant-sdpa-class EAGER_QUANT_SDPA_CLASS] [--weight-equalization] [--rotation {fx,layerwise,fused_no_fx}] [--fine-tune] [--optimize-rotations] [--custom-trainer CUSTOM_TRAINER]
@@ -37,7 +39,7 @@ usage: main.py [-h] [--config CONFIG] [--model MODEL] [--custom-quantizer CUSTOM
                [--export-prefix EXPORT_PREFIX] [--export-path EXPORT_PATH] [--checkpoint-name CHECKPOINT_NAME] [--load-checkpoint] [--learned-round {None,identity}] [--learned-round-fast-update]
                [--few-shot-eval {lm_eval,lighteval}] [--few-shot-override-batch-size FEW_SHOT_OVERRIDE_BATCH_SIZE] [--compile-ptq] [--compile-eval] [--few-shot-zeroshot]
                [--bos-preprocessing {None,document,sequence}] [--few-shot-limit FEW_SHOT_LIMIT] [--few-shot-tasks [FEW_SHOT_TASKS ...]] [--awq-scale] [--awq-clip]
-               [--calibration-batch-size CALIBRATION_BATCH_SIZE] [--grid-opt-solver {piso,chunked-piso}]
+               [--calibration-batch-size CALIBRATION_BATCH_SIZE] [--grid-opt-solver {piso,chunked-piso,gguf-seed,gguf-symmetric-sweep,gguf-symmetric-descent,gguf-affine-sweep}]
                [--grid-opt-use-quant-activations | --no-grid-opt-use-quant-activations] [--grid-opt-solver-batch-size GRID_OPT_SOLVER_BATCH_SIZE] [--grid-opt-objective {unquantized,self-activation,cross-activation}]
                [--grid-opt-group-sequential | --no-grid-opt-group-sequential] [--grid-opt-group-sequential-act-order | --no-grid-opt-group-sequential-act-order] [--grid-opt-covariance-mode {dense,diagonal,identity}]
                [--grid-opt-group-gpxq-layer-interleaved | --no-grid-opt-group-gpxq-layer-interleaved]
@@ -152,6 +154,20 @@ options:
   --qronos              Apply Qronos.
   --qronos-alpha QRONOS_ALPHA
                         Alpha for Qronos. Default: 1e-06.
+  --grid-opt-magnitude {one,square,abs,sqrt_abs,rms_quad,rms_plus_abs}
+                        GGUF solvers: the per-weight term the fit is weighed by, on top of the importance of its input channel. rms_quad is sqrt(factor * mean(w^2) + w^2), with the mean over --grid-
+                        opt-magnitude-scope. Default: rms_quad.
+  --grid-opt-magnitude-factor GRID_OPT_MAGNITUDE_FACTOR
+                        GGUF solvers: the factor of --grid-opt-magnitude rms_quad. Default: 1.0.
+  --grid-opt-magnitude-scope {block,super_block,row}
+                        GGUF solvers: what the mean square of --grid-opt-magnitude is taken over. super_block requires a quantizer whose scales are stored on a grid of their own. Default: row.
+  --grid-opt-sweep-steps GRID_OPT_SWEEP_STEPS
+                        GGUF solvers: number of trial scales of a sweep. Default: the solver's own, 9 for gguf-symmetric-sweep (on each side of the seed) and 36 for gguf-affine-sweep.
+  --grid-opt-sweep-step GRID_OPT_SWEEP_STEP
+                        GGUF solvers: spacing of the trial scales of a sweep. Default: the solver's own, 0.1 for gguf-symmetric-sweep and 0.05 for gguf-affine-sweep.
+  --grid-opt-scale-placement {seed,sweep}
+                        GGUF solvers, for a quantizer whose scales are stored on a grid of their own: place them there by their largest magnitude (seed) or by a weighted sweep around it (sweep).
+                        Default: sweep.
   --gptq                Apply GPTQ.
   --gpfq                Apply GPFQ.
   --gpxq-act-order      Apply GPxQ activation ordering.
@@ -247,7 +263,7 @@ options:
   --awq-clip            Whether to apply AWQ clipping (default: False).
   --calibration-batch-size CALIBRATION_BATCH_SIZE
                         Batch size for calibration data loader. (default: 1).
-  --grid-opt-solver {piso,chunked-piso}
+  --grid-opt-solver {piso,chunked-piso,gguf-seed,gguf-symmetric-sweep,gguf-symmetric-descent,gguf-affine-sweep}
                         Solver that optimizes the scale. piso is PiSO (Piecewise Scale Optimization); chunked-piso is a faster per-channel variant that only supports positive scales (symmetric
                         grids). Default: piso
   --grid-opt-use-quant-activations
